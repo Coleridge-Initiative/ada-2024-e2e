@@ -29,7 +29,7 @@ book:
     style: floating
     tools: 
       - icon: github
-        href: https://github.com/Coleridge-Initiative
+        href: https://coleridge-initiative.github.io/ada-2024-e2e.github.io/
         
 format:
   html:

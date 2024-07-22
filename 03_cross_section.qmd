@@ -8,6 +8,7 @@ toc_float:
       collapsed: no
       smooth_scroll: yes
 number-sections: true
+number-offset: 0
 format:
   html:
     embed-resources: true
