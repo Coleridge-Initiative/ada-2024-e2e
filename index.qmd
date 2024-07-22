@@ -1,7 +1,0 @@
-# Preface {.unnumbered}
-
-This contains the class notebooks for the [Coleridge Initiative](https://coleridgeinitiative.org/) 2024 Arkansas Applied Data Analytics class Examining Enrollment to Employment Trajectories in Arkansas.
-
-> Please be aware that links pointing to other sections within a specific notebook are operational. Links directing to sections or other references outside of the notebook will not be functional.
-
-© 2023 The Coleridge Initiative, Inc
