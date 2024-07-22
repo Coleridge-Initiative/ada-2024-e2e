@@ -1,0 +1,1157 @@
+---
+title: "Longitudinal Analysis"
+authors: "Corey Sparks, Benjamin Feder, Joshua Edelmann"
+subtitle: "Module 2: Notebook 4"
+toc: true
+toc_depth: 3
+toc_float:
+      collapsed: no
+      smooth_scroll: yes
+number-sections: true
+format:
+  html:
+    embed-resources: true
+    df-print: paged
+---
+
+```{css echo=FALSE}
+
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+h2 {margin: 2m 0 !important;} 
+
+details {
+  margin-left: 4em;
+  margin-bottom: .5rem;
+}
+
+summary { 
+  margin-left: -2em;
+}
+```
+
+```{r setup, include=FALSE}
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+#theme: lumen
+    #highlight: tango
+
+knitr::opts_chunk$set(include=TRUE, echo=TRUE, eval = FALSE,  warning = FALSE, fig.align = 'center')  #results='hide') # needs to delete results='hide'
+```
+
+```{r, include=FALSE, echo=FALSE}
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+
+## Load libraries
+library(RJDBC)     # For connecting to the database
+# For data manipulation/visualization
+library(tidyverse)
+# For faster date conversions
+library(lubridate)
+library(dbplyr)
+library(odbc)
+library(DBI)
+library(RPostgreSQL)
+library(zoo)
+source("P:/pr-ci-training/connection_setup//adrf_redshift.r")
+
+con <- adrf_redshift(usertype = "CI")
+```
+
+# Introduction
+
+Welcome to the fourth notebook of Module 2, where will expand our focus to a framework that facilitates longitudinal investigations, a **cohort analysis**. In doing so, we will reintroduce a fact table initially discussed in the second notebook that tracks individuals at the program level by their spells, or episodes of service. Here, we will develop a cohort analysis to help address our same focused research topic introduced in the previous notebook, which is aimed at identifying promising pathways for a specific set of TANF-enrolled individuals before COVID-imposed restrictions were enforced in the state.
+
+Previously, we applied a cross-sectional analysis to the TANF data, which allowed us to better understand the volume of individuals enrolled in TANF at a specific moment in time. Since cross-sections are restricted to particular snapshots, and do not account for shocks though, they are limited in providing a framework for tracking experiences over time. Contrast this approach to that of a cohort analysis. In creating a cohort, we will denote a reference point where each member of our cohort experienced a common event - this could be entry into a program, exit from a program, or any other shared experience across a set of observations. With this setup, we can better understand and compare the experiences of those encountering the same policies and economic shocks at the same time, especially across different subgroups, or even cohorts.
+
+Whereas a cross-section evaluates a stock, a cohort lets us look at flows. Within the context of our research topic, focusing on flows will help us identify promising pathways for TANF recipients by evaluating the outcomes of those previously receiving TANF benefits, which gets at the goal of our mini research project.
+
+Here, we will reintroduce the code required to set up our R environment to connect to the proper database and load certain packages. If you would rather plan on running the SQL code separately, instructions for creating a `.sql` script and running the code directly in DBeaver are also available allow.
+
+**Code chunks in this notebook will be given in both SQL and R, so follow the setup that applies to your preferred language below.**
+
+::: {.callout collapse="true"}
+## SQL Setup
+
+For working with the database directly using SQL, the easiest way is to still copy the commands from this notebook into a script in DBeaver. As a reminder, the steps to do so are as follows:
+
+To create a new .sql script:
+
+1.  Open DBeaver, located on the ADRF Desktop. The icon looks like this:
+
+    ![](images/dbeaver.png)
+
+2.  Establish your connection to the database by logging in. To do this, double-click `Redshift11_projects` on the left hand side, and it will ask for your username and password. Your username is `adrf\` followed by the name of your U: drive folder - for example, `adrf\John.Doe.T00112`. Your password is the same as the **second** password you used to log in to the ADRF - if you forgot it, you **adjust it in the ADRF management portal!**
+
+    After you successfully establish your connection, you should see a green check next to the database name, like so:
+
+    ![](images/success.png)
+
+3.  In the top menu bar, click **SQL Editor** then **New SQL Script**:
+
+    ![](images/new_script.png)
+
+4.  To test if your connection is working, try pasting the following chunk of code into your script:
+
+    ```{sql,  eval=FALSE}
+    SELECT * 
+    FROM tr_e2e.dim_person
+    LIMIT 5
+    ```
+
+    Then run it by clicking the run button next to the script, or by pressing CTRL + Enter.
+
+5.  You should then be able to see the query output in the box below the code.
+:::
+
+::: {.callout collapse="true"}
+## R Setup
+
+The easiest way to work with the Redshift data from within an R Script is using a combination of a JBDC connection and the `dbplyr` package. The necessary setup for this approach is described below.
+
+#### Load libraries {.unnumbered}
+
+Just like we did in the Foundations Module, in running SQL and R code together through R, we need to load the `RJDBC` package. In addition, we will load the `tidyverse` suite of packages, as they will help us implement some of our fundamental data operations while maintaining a consistent syntax. Lastly, to enable an option discussed in the coming sections, we will load a new package for working with databases in R, `dbplyr`.
+
+> Every time you create a new R file, you should copy and run the following code snippet. You can easily copy the entire snippet by hovering over the cell and clicking the clipboard icon on the top-right edge.
+
+```{r}
+options(scipen = 999) # avoid scientific notation
+library(RJDBC)
+library(tidyverse)
+library(dbplyr)
+library(zoo) # time/date manipulations
+```
+
+::: callout-warning
+If you receive an error message saying `there is no package called ...`, then please first run:
+
+```         
+install.packages("PACKAGENAME")
+```
+
+where you replace `PACKAGENAME` with the name of the package that is missing.
+:::
+
+#### Establish Database Connection {.unnumbered}
+
+To load data from the Redshift server into R, we need to first set up a connection to the database. The following set of commands accomplish this:
+
+```{r eval=FALSE}
+dbusr=Sys.getenv("DBUSER")
+dbpswd=Sys.getenv("DBPASSWD")
+
+url <- "jdbc:redshift:iam://adrf-redshift11.cdy8ch2udktk.us-gov-west-1.redshift.amazonaws.com:5439/projects;loginToRp=urn:amazon:webservices:govcloud;ssl=true;AutoCreate=true;idp_host=adfs.adrf.net;idp_port=443;ssl_insecure=true;plugin_name=com.amazon.redshift.plugin.AdfsCredentialsProvider"
+
+driver <- JDBC(
+  "com.amazon.redshift.jdbc42.Driver",
+  classPath = "C:\\drivers\\redshift_withsdk\\redshift-jdbc42-2.1.0.12\\redshift-jdbc42-2.1.0.12.jar",
+  identifier.quote="`"
+)
+
+con <- dbConnect(driver, url, dbusr, dbpswd)
+```
+
+As a reminder, don't worry too much about the details of this connection - **you can simply copy and paste this code each time you want to connect your R script to the Redshift database**.
+
+#### New `.Renviron` {.unnumbered}
+
+For this code to work, you need to create a new `.Renviron` file in your user folder (i.e. `U:\\John.Doe.P00002`) that contains the following:
+
+```         
+DBUSER='adrf\John.Doe.P00002'
+DBPASSWD='xxxxxxxxxxxx'
+```
+
+where `John.Doe.P00002` is replaced with your username and `xxxxxxxxxx` is replaced with your password (both still in quotes!) The setup of this code is nearly identical to that required in the Foundations Module workspace - however, `DBUSER` should now end with `.T00113` instead of `.T00112`.
+
+A detailed video from the Foundations Module, "Introduction to RStudio," demonstrating how to create an .Renviron file is available on the Resources page on class website in the subsection "Quick Links."
+:::
+
+# Data Model: Enrollment by Spell
+
+At this point, we have started unveiling the full data model available for this class. In the previous notebook, we used the `fact_person_quarterly_program_enrollment` table in developing our cross-section. Now, we will leverage a similar table, `fact_person_program_start_end`, which is also located in the `tr_e2e` schema. As its name suggests, this table tracks participation by start and end dates, or the entire spell, across the different WIOA, SNAP, and TANF programs. Together, this enrollment by spell and the quarterly enrollment fact tables should capture the same information, albeit in different formats. And as you will see, they are meant for different types of analyses.
+
+Since these two fact tables are quite similar, we will link the enrollment by spell fact table to the same three dimension tables we introduced in the previous notebook:
+
+-   Person dimension, storing information on the unique collection of persons available in the data, merging person-level attributes from a variety of sources, resulting in a "golden record" with a higher completeness than is available in individual sources
+-   Time dimension, storing all possible values for a period of time (day, week, quarter, month, year) across a long period and allows for easy cross-referencing across different periods
+-   Program Dimension, a reference table mapping a numeric surrogate identifier in the fact table to a more descriptive program name
+
+The following diagram (available by selecting the "ER Diagram" after clicking on the specific table in the Database Navigator of DBeaver) visualizes the relationships between this fact table and these three dimension tables in the data model:
+
+![](images/start_end_fact_er.png)
+
+As mentioned above, the enrollment information by person, program, and spell is available in `tr_e2e.fact_person_program_start_end`. Each row is a unique combination of person, program, and spell. This means that a person may have multiple rows in the data if they have multiple spells in the same program or separate spells across multiple programs. Additionally, an individual may appear with the same start or end quarter in multiple rows, which would indicate consistent start or end dates across multiple programs. Depending on the service provider, this may indicate the presence of automatic or separate co-enrollment. This table actually makes it very easy to identify cohorts, assuming the cohort restrictions align with that of the data model.
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT *
+FROM tr_e2e.fact_person_program_start_end
+LIMIT 5
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_program_start_end")) %>%
+  head(5)
+```
+:::
+
+Note the presence of the surrogate columns linking to each of the dimension tables: `person_key`, `program_key`, `entry_year_quarter_key`, and `exit_year_quarter_key`. Instead of having a single surrogate column linking to the time dimension table like in the quarterly enrollment fact table, this one connects the time dimension table to both the entry and exit points of the spell. Beyond this information, the table just contains a unique row identifier for the table, `person_program_start_end_id`. This column does not link to any other table in a meaningful fashion.
+
+# Cohort
+
+Composing a cohort enables us to understanding the outcomes and behaviors of a particular group of participants who are identified by their shared experience of some event at a defined time period. From this cohort, we can then measure prevalence of participation in programs and patterns of co-enrollment over time, as well as foundational outcomes related to specific program evaluation criteria. Cohort analyses in general allow for a deep understanding of experiences over time, because they consist of observations of a focal group of people potentially measured at multiple points in time, rather than observations at an arbitrary point in time like a cross-sectional data set does.
+
+In the figure below, we illustrate multiple cohorts, identified by the different colors, over time. The value of looking at a cohort of individuals is that we can tie variation in later program participation or outcomes to events that occur earlier in the lives of this group. The diagram below is a visual representation of multiple cohorts. You can contrast this with the [diagram](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/03_cross_section.html#cross-section) in the previous notebook displaying colored vertical lines representing cross-sections, potentially including multiple cohorts in each view. In this notebook, we are going to explore both constructing a cohort and as one of these horizontal lines.
+
+![](images/cohorts.png)
+
+In total, there are three main steps in carrying out an effective cohort analysis:
+
+1.  Defining your cohort - selecting the decision rules to subset the data to your cohort of interest
+2.  Record linkage - adding additional datasets to your base cohort to build your full cohort analytic frame with all necessary information for your analysis
+3.  Measurement creation - identifying and developing outcomes for your study
+
+This notebook is primarily concerned with the first step, as we will walk through the decision rules we will use to define a cohort from the raw microdata aimed at helping us answer our research question. Incorporating the data model will help us accomplish the second step, and from there we will look into potentially interesting features of our cohort. While we will start to leverage the longitudinal nature of our cohort in this notebook, we will devote the the next notebook to applying relevant time-conscious measures.
+
+::: callout-important
+## Checkpoint
+
+Do you think a cohort analysis would be helpful for your group project? Either way, jot down some ideas and provide a supporting argument for doing so (or not) in your team's project template. Identify specific attributes that may be valuable in defining a cohort, as well as a potential anchor point from which you can base the cohort, if you are arguing in favor of the analysis.
+:::
+
+## Cohort Creation
+
+Before writing code for creating and exploring our cohort, it is crucial to think through the decisions from a data literacy standpoint. Again, the key idea here is to define a set of individuals with a consistent "anchor point" in the data so we can follow them longitudinally. Specifically, given our aim in the notebook series, we want to identify a group of TANF recipients before COVID-imposed restrictions were enforced in the state so we can track them over time.
+
+First, we have to think through the underlying set of observations we want to track over time and where they exist. Fundamentally, this ties back to identifying our original population of interest.
+
+### Primary Data Source(s)
+
+In this class, we luckily have a bunch of options for tracking individuals longitudinally (PIRL, Joint PIRL, TANF, SNAP, Higher Education, etc.). In any case, if we choose to focus on one base dataset, it will limit the scope of potential observations. For instance, if we develop our cohort on the PIRL data, then each member of our cohort must have been involved in a WIOA Title I or III program at some point in time. In revisiting our research question, it seems that our population of interest should be rooted in the TANF data. More specifically, the `tanf_member` file is most appropriate, since our focus is on individuals, not cases.
+
+> Note: In this class, since we have access to many potentially overlapping longitudinal datasets, you might want to develop a cohort based on multiple sources. For example, if you are interested in those co-enrolled in SNAP and TANF, your data will rely on the intersection of the SNAP and TANF data.
+
+### Defining Characteristics: General
+
+Now that we have identified our primary data source, we next need to decide how we are going to filter the millions of observations in our TANF data to a useful subset for analysis. The decision rules for your cohort will vary based on your population of interest and research question, but generally, could include:
+
+-   Categorical decisions: You might focus on certain characteristics. Some may be based on already provided categorical variables (like filtering for only work-eligible recipients), with others on certain conditions derived from numeric variables (like filtering for only recipients on cases receiving child care support over a certain amount)
+-   Time-based decisions: Because a cohort is defined by a timetable, you will need to limit your cohort to only a particular starting period or periods. You might also want to include a cutoff date for observations, or add other time-based controls to your cohort. As you are considering a cutoff date, you should consider the measures you would like to apply to your cohort, and the data coverage required to support them. For example, if you wanted to look at a more recent set of TANF recipients, you will be limited by the range of UI wage records in evaluating future employment outcomes.
+
+In addition to these types of decisions, you might also need to exclude certain individuals from your cohort based on issues or inaccuracies in the underlying data. These could include inaccuracies in something like birth dates or missing data. We will talk more specifically about how to handle these inaccuracies later, but it is something to keep in mind as you begin planning your cohort with your team.
+
+### Defining Characteristics: Applying them to our Data
+
+Since we will eventually want to explore employment pathways of TANF recipients, we will filter the TANF data in the ways described below to develop our cohort. Note that some of these constraints are only able to be executed on the original data sources (`tanf_member` unless otherwise designated), and not in the data model, since the data model does not the entire set of attributes available in the TANF file.
+
+> Note: We will demonstrate how to link the original data source table to the data model later on in this notebook.
+
+-   Categorical decision rules:
+    -   Validated hashed social security numbers, `valid_ssn_format = 'Y'`
+    -   Not a child-only case, `child_only_case = FALSE` in `tanf_case`
+    -   Individual is eligible for work, \`work_eligible_individual in '('1', '2', '3', '4', '5')'
+    -   Individual is included in the work participation rate, `cast(work_participation_status as numeric) between 12 and 98`
+-   Time-based decision rules:
+    -   Recipients who completed their TANF spell, `tanf_end_of_spell = 'TRUE'`, in the first quarter of 2019, `reporting_month in ('201901', '201902', '201903')`
+
+By limiting our cohort to TANF exiters in 2019Q1, we ensure that all individuals completed a spell before COVID-imposed restrictions were enforced in the state. In addition, we will be able to evaluate subsequent short-term employment outcomes before COVID-imposed restrictions were enforced in the state. Note that this cohort makes up a portion of the overall cross-section we analyzed in the previous notebook.
+
+> Note: Alternatively, we could define a cohort of TANF recipients based on their start date. This would result in different implications for outcome measures.
+
+Let's apply these decision rules to the TANF data, joining the `tanf_case` and `tanf_member` data on common `case_id` and `reporting_month` values, and see how many people and rows we return:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT COUNT(tm.*) AS num_rows, COUNT(DISTINCT(tm.social_security_number)) AS num_ppl
+FROM ds_ar_dhs.tanf_member tm 
+JOIN ds_ar_dhs.tanf_case tc ON 
+  (tm.case_id = tc.case_id AND tm.reporting_month = tc.reporting_month)
+WHERE tm.valid_ssn_format = 'Y' AND
+  tc.child_only_case = 'FALSE' AND 
+	tm.work_eligible_individual IN ('1', '2', '3', '4', '5') AND 
+	CAST(work_participation_status AS NUMERIC) BETWEEN 12 AND 98 AND
+	tm.tanf_end_of_spell = 'TRUE' AND
+	tm.reporting_month IN ('201901', '201902', '201903')
+```
+
+## `dbplyr` query
+
+```{r}
+tm <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    valid_ssn_format == 'Y',
+    work_eligible_individual %in% c('1', '2', '3', '4', '5'),
+    between(as.numeric(work_participation_status), 12, 98),
+    tanf_end_of_spell == "TRUE",
+    reporting_month %in% c("201901", "201902", "201903")
+  )
+
+tc <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_case")) %>%
+  filter(child_only_case == "FALSE")
+
+tm %>%
+  inner_join(tc, by = c("case_id", "reporting_month")) %>%
+  summarize(
+    num_rows = n(),
+    num_ppl = n_distinct(social_security_number)
+  )
+```
+:::
+
+Recall that we encountered a similar issue in developing our cross-section with the original data source, because the TANF data is recorded monthly, and not quarterly. Here, we see some instances of an individual having multiple spell exits within this quarter. Even though the fact table records information at the quarterly grain, we would still see multiple rows for an individual if they had different spells within the same quarter. To make sure we are not overweighting our analysis and accounting for individuals who have multiple spells, we will focus on an individual's last, or most recent, spell within this time frame.
+
+We can isolate the most recent spell per individual this time frame by assigning a sequential integer to each row based on the order of `reporting_month` for each `social_security_number`, and then take the most recent one. Let's confirm this logic:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+--USE CTE, FIRST ASSIGNING EACH OBSERVATION BY PERSON BASED ON ORDER
+--THEN SELECT ONLY MOST RECENT OBSERVATION PER PERSON
+WITH ordering AS (
+  SELECT tm.*, 
+    --ROW_NUMBER() ASSIGNS A SEQUENTIAL INTEGER WITHIN EACH PARTITION (social_security_number)
+    --ORDERING IS DETERMINED BY THE ORDER BY (tm.reporting_month DESC)
+    ROW_NUMBER() OVER (PARTITION BY tm.social_security_number ORDER BY tm.reporting_month DESC) AS latest_order
+  FROM ds_ar_dhs.tanf_member tm 
+  JOIN ds_ar_dhs.tanf_case tc ON 
+    (tm.case_id = tc.case_id AND tm.reporting_month = tc.reporting_month)
+  WHERE tm.valid_ssn_format = 'Y' AND
+    tc.child_only_case = 'FALSE' AND 
+  	tm.work_eligible_individual IN ('1', '2', '3', '4', '5') AND 
+  	CAST(work_participation_status AS NUMERIC) BETWEEN 12 AND 98 AND
+  	tm.tanf_end_of_spell = 'TRUE' AND
+  	tm.reporting_month IN ('201901', '201902', '201903')
+)
+SELECT COUNT(*) AS num_rows, COUNT(DISTINCT(social_security_number)) AS num_ppl
+FROM ordering
+WHERE latest_order = 1
+```
+
+## `dbplyr` query
+
+```{r}
+# first assign each observation by person based on order and then filter for only
+# most recent observation
+tm <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    valid_ssn_format == 'Y',
+    work_eligible_individual %in% c('1', '2', '3', '4', '5'),
+    between(as.numeric(work_participation_status), 12, 98),
+    tanf_end_of_spell == "TRUE",
+    reporting_month %in% c("201901", "201902", "201903")
+  ) %>%
+  group_by(social_security_number) %>%
+  # window_order() assigns ordering within each group using a SQL window function
+  window_order(desc(reporting_month)) %>%
+  # row_number() assigns a sequential integer within each group (social_security_number)
+  mutate(latest_order = row_number()) %>%
+  ungroup() %>%
+  filter(latest_order == 1)
+
+tc <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_case")) %>%
+  filter(child_only_case == "FALSE")
+
+tm %>%
+  inner_join(tc, by = c("case_id", "reporting_month")) %>%
+  summarize(
+    num_rows = n(),
+    num_ppl = n_distinct(social_security_number)
+  )
+```
+:::
+
+Fantastic! For context, in the [cross-section notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/03_cross_section.html#using-the-fact-table), we focused our analysis on the following amount of individuals, all of whom received TANF benefits at some point within 2019Q1:
+
+```{r, echo=FALSE}
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_quarterly_program_enrollment"))
+
+dp <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name == "Temporary Assistance for Needy Families (TANF)")
+
+dyq <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  filter(calendar_year == '2019', calendar_quarter == '1')
+
+fact %>%
+  inner_join(dp, by = "program_key") %>%
+  inner_join(dyq, by = c("enrollment_quarter_key" = "year_quarter_key")) %>%
+  summarize(
+    num_ppl = n_distinct(person_key)
+  )
+```
+
+With some manual math, we can see that our refined cohort of exiters represents approximately REDACTED of all TANF participants enrolled in the quarter.
+
+## Analysis
+
+At this point, we have an initial cohort cross-section - that is observations for just our cohort at a single point in time. In this case, that point in time corresponds to their exit, which is in 2019Q1. Before pulling in any past observations, let's glance at our resulting data frame, reading it into R for future use:
+
+> The code in the SQL query can be run in DBeaver by pasting just the code inside the quotations after `qry <-`.
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+--USE CTE, FIRST ASSIGNING EACH OBSERVATION BY PERSON BASED ON ORDER
+--THEN SELECT ONLY MOST RECENT OBSERVATION PER PERSON
+WITH ordering AS (
+  SELECT tm.*, 
+    --ROW_NUMBER() ASSIGNS A SEQUENTIAL INTEGER WITHIN EACH PARTITION (social_security_number)
+    --ORDERING IS DETERMINED BY THE ORDER BY (tm.reporting_month DESC)
+    ROW_NUMBER() OVER (PARTITION BY tm.social_security_number ORDER BY tm.reporting_month DESC) AS latest_order
+  FROM ds_ar_dhs.tanf_member tm 
+  JOIN ds_ar_dhs.tanf_case tc ON 
+    (tm.case_id = tc.case_id AND tm.reporting_month = tc.reporting_month)
+  WHERE tm.valid_ssn_format = 'Y' AND
+    tc.child_only_case = 'FALSE' AND 
+  	tm.work_eligible_individual IN ('1', '2', '3', '4', '5') AND 
+  	CAST(work_participation_status AS NUMERIC) BETWEEN 12 AND 98 AND
+  	tm.tanf_end_of_spell = 'TRUE' AND
+  	tm.reporting_month IN ('201901', '201902', '201903')
+)
+SELECT *
+FROM ordering
+WHERE latest_order = 1
+"
+
+# ods to designate from tanf data and not data model
+cohort_ods <- dbGetQuery(con, qry) %>%
+  # ignore latest_order since it's not needed anymore
+  select(-latest_order)
+
+head(cohort_ods)
+```
+
+## `dbplyr` query
+
+```{r}
+tm <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    valid_ssn_format == 'Y',
+    work_eligible_individual %in% c('1', '2', '3', '4', '5'),
+    between(as.numeric(work_participation_status), 12, 98),
+    tanf_end_of_spell == "TRUE",
+    reporting_month %in% c("201901", "201902", "201903")
+  ) %>%
+  group_by(social_security_number) %>%
+  # window_order() assigns ordering within each group using a SQL window function
+  window_order(desc(reporting_month)) %>%
+  # row_number() assigns a sequential integer within each group (social_security_number)
+  mutate(latest_order = row_number()) %>%
+  ungroup() %>%
+  filter(latest_order == 1) %>%
+  select(-latest_order)
+
+tc <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_case")) %>%
+  filter(child_only_case == "FALSE") %>%
+  # only include columns on join so only returning columns from tm in join
+  select(case_id, reporting_month)
+
+# ods to designate from tanf data and not data model
+cohort_ods <- tm %>%
+  inner_join(tc, by = c("case_id", "reporting_month")) %>%
+  collect()
+
+head(cohort_ods)
+```
+:::
+
+Interestingly enough, the Chapin Hall data model does include some variables accounting for cumulative time. For now, we will limit our analysis to these variables.
+
+> If you were interested in a cumulative statistic not currently tracked in the model, like total number of vocational education training hours, you would need to find all observations between the month corresponding to the end of the spell and the closest `reporting_month` where `tanf_start_of_spell = TRUE`.
+
+### Time on TANF
+
+As you might have seen, two of the cumulative variables tracked our current cohort data frame are `tanf_spell_months` and `tanf_total_months`. We can explore the distribution of both of these variables, first tabularly and then visually. We will start with `tanf_spell_months`:
+
+> `benefit_spell_months` and `tanf_total_months` should also be the same as `tanf_spell_months` and `tanf_total_months`, respectively, because SSP information is not tracked in this dataset.
+
+```{r}
+cohort_ods %>%
+  # account for redshift reading in as character
+  mutate(tanf_spell_months = as.numeric(tanf_spell_months)) %>%
+  # pull() extracts all values in the column into a single vector
+  # this ensures summary info just in this column 
+  pull(tanf_spell_months) %>%
+  summary()
+```
+
+As expected, since we had to account for individuals who had multiple spells ending in the same quarter, there are some who had a spell length of a single month.
+
+```{r}
+cohort_ods %>%
+  # account for redshift reading in as character
+  mutate(tanf_spell_months = as.numeric(tanf_spell_months)) %>%
+  ggplot(aes(x=tanf_spell_months)) +
+  geom_histogram()
+```
+
+Visually, we can see that the majority of spells within our cohort were on the shorter side, with a few individuals pushing the distribution right-ward. Let's see if we have similar findings when looking at `tanf_total_months`:
+
+```{r}
+cohort_ods %>%
+  # account for redshift reading in as character
+  mutate(tanf_total_months = as.numeric(tanf_total_months)) %>%
+  # pull() extracts all values in the column into a single vector
+  # this ensures summary info just in this column 
+  pull(tanf_total_months) %>%
+  summary()
+```
+
+The mean and median are just slightly higher here than that of `tanf_spell_months`.
+
+```{r}
+cohort_ods %>%
+  # account for redshift reading in as character
+  mutate(tanf_total_months = as.numeric(tanf_total_months)) %>%
+  ggplot(aes(x=tanf_total_months)) +
+  geom_histogram()
+```
+
+The distribution seems to be slightly more concentrated on the higher end in this graph, but the two have similar shapes. This might indicate that most of our cohort had been on one continuous spell within their particular TANF case. We can verify this by comparing `tanf_spell_months` with `tanf_total_months` for each record.
+
+```{r}
+cohort_ods %>%
+  mutate(
+    tanf_spell_months = as.numeric(tanf_spell_months),
+    tanf_total_months = as.numeric(tanf_total_months),
+    more_than_one = tanf_spell_months < tanf_total_months
+  ) %>%
+  group_by(more_than_one) %>%
+  summarize(
+    n_ppl = n_distinct(social_security_number)
+  )
+```
+
+### Race/Ethnicity
+
+While the TANF data in isolation (and `cohort`) has columns pertaining to race/ethnicity values, we can leverage the larger data infrastructure and pull in our golden records at the individual level by joining our cohort to the `dim_person` table in the data model. We can accomplish this in SQL or dbplyr by joining the `social_security_number` from the TANF data to the `person_uid` column in `tr_e2e.dim_person` and applying the same logic for combining the different race/ethnicity values as in the previous notebook.
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+--USE CTE, FIRST ASSIGNING EACH OBSERVATION BY PERSON BASED ON ORDER
+--THEN SELECT ONLY MOST RECENT OBSERVATION PER PERSON JOINED TO PERSON TABLE
+WITH ordering AS (
+  SELECT tm.*, 
+    --ROW_NUMBER() ASSIGNS A SEQUENTIAL INTEGER WITHIN EACH PARTITION (social_security_number)
+    --ORDERING IS DETERMINED BY THE ORDER BY (tm.reporting_month DESC)
+    ROW_NUMBER() OVER (PARTITION BY tm.social_security_number ORDER BY tm.reporting_month DESC) AS latest_order
+  FROM ds_ar_dhs.tanf_member tm 
+  JOIN ds_ar_dhs.tanf_case tc ON 
+    (tm.case_id = tc.case_id AND tm.reporting_month = tc.reporting_month)
+  WHERE tm.valid_ssn_format = 'Y' AND
+    tc.child_only_case = 'FALSE' AND 
+  	tm.work_eligible_individual IN ('1', '2', '3', '4', '5') AND 
+  	CAST(work_participation_status AS NUMERIC) BETWEEN 12 AND 98 AND
+  	tm.tanf_end_of_spell = 'TRUE' AND
+  	tm.reporting_month IN ('201901', '201902', '201903')
+)
+SELECT ordering.*, dp.person_key, CASE
+    WHEN dp.ethnicity_american_indian_or_alaska_native = 'Yes' THEN 'AIAN' 
+    WHEN dp.ethnicity_black_or_african_american = 'Yes' THEN 'AfAm'
+    WHEN dp.ethnicity_hispanic_or_latino= 'Yes' THEN 'Hisp'
+    WHEN dp.ethnicity_asian = 'Yes' THEN 'Asian'
+    WHEN dp.ethnicity_white = 'Yes' THEN 'Wht'
+    WHEN dp.ethnicity_other ='Yes' THEN 'Other' 
+    ELSE 'Missing' 
+	END AS eth_recode_person
+FROM ordering
+JOIN tr_e2e.dim_person dp on ordering.social_security_number = dp.person_uid 
+WHERE latest_order = 1
+"
+
+cohort_person <- dbGetQuery(con, qry) %>%
+  # ignore latest_order since it's not needed anymore
+  select(-latest_order)
+
+head(cohort_person)
+```
+
+## `dbplyr` query
+
+```{r}
+tm <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    valid_ssn_format == 'Y',
+    work_eligible_individual %in% c('1', '2', '3', '4', '5'),
+    between(as.numeric(work_participation_status), 12, 98),
+    tanf_end_of_spell == "TRUE",
+    reporting_month %in% c("201901", "201902", "201903")
+  ) %>%
+  group_by(social_security_number) %>%
+  # window_order() assigns ordering within each group using a SQL window function
+  window_order(desc(reporting_month)) %>%
+  # row_number() assigns a sequential integer within each group (social_security_number)
+  mutate(latest_order = row_number()) %>%
+  ungroup() %>%
+  filter(latest_order == 1) %>%
+  select(-latest_order)
+
+tc <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_case")) %>%
+  filter(child_only_case == "FALSE") %>%
+  # only include columns on join so only returning columns from tm in join
+  select(case_id, reporting_month)
+
+dp <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_person")) %>%
+  mutate(
+    eth_recode_person = case_when(
+      ethnicity_american_indian_or_alaska_native == 'Yes' ~ 'AIAN',
+      ethnicity_black_or_african_american == 'Yes' ~ 'AfAm',
+        ethnicity_hispanic_or_latino == 'Yes' ~ 'Hisp',
+        ethnicity_asian == 'Yes' ~ 'Asian',
+        ethnicity_white == 'Yes' ~ 'Wht',
+        ethnicity_other == 'Yes' ~ 'Other', 
+        TRUE ~ 'Missing'
+    )
+  ) %>%
+  # keep only relevant columns
+  select(person_uid, person_key, eth_recode_person)
+
+cohort_person <- tm %>%
+  inner_join(tc, by = c("case_id", "reporting_month")) %>%
+  inner_join(dp, by = c("social_security_number"="person_uid")) %>%
+  collect()
+
+head(cohort_person)
+```
+:::
+
+Now that we have our combined race/ethnicity column from our golden record pulled in, we can explore its distribution:
+
+```{r}
+cohort_person %>%
+  group_by(eth_recode_person) %>% 
+  summarise(npersons = n_distinct(person_key)) %>% 
+  # ungroup so we can take the percentage with denominator as all in next step
+  ungroup() %>% 
+  mutate(pct = 100 * (npersons / sum( npersons )))
+```
+
+Relative to the [distribution](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/03_cross_section.html#raceethnicity) of our cross-section, our cohort consists of a slightly higher percentage of those categorized as African American.
+
+### Simultaneous Co-Enrollment
+
+**Co-enrollment** refers to instances where multiple spells, or episodes of service, occur simultaneously across programs. Some programs require 100% co-enrollment, meaning that if an individual enrolls in one program, they may be automatically enrolled in a complementary one. In Arkansas, TANF-based co-enrollment, in particular with SNAP, may occur manually, and other times it may be through a referral mechanism. While we cannot completely distinguish between the two, identifying instances where multiple program spells start in the same quarter can help us understand these cross-program dynamics.
+
+In identifying cases of simultaneous co-enrollment, as discussed in the cross-section notebook, there are two options:
+
+1.  Develop logic for joining and matching across grains to domain-specific original data source tables
+2.  Leverage the program participation fact tables in the dimensional data model
+
+We will again opt for the second one, this time in the context of identifying co-enrollment at the start of the spell. The approach will require two steps: first identifying the beginning of the spell, and then finding records of concurrent spell starts across other programs of interest. Like we did in the previous notebook, we will limit the scope of co-enrollment and concurrent participation to the SNAP and Adult Education programs.
+
+In doing so, we will finally bring the `fact_person_program_start_end` table into our analysis. Since the table already has spell start and end information, we can accomplish our first step by using our cohort table to filter the fact table just to the observations we need through an inner join. In doing so, we will take the latest `entry_year_quarter_key` per person associated with a TANF spell ending in 2019Q1 to ensure we are applying the same logic we did to our cohort. Let's see if we return the same number of observations and people as before:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+--USE CTE, FIRST IDENTIFYING COHORT BASED ON TANF DATA FOR LASTEST SPELL PER PERSON
+--THEN USE COHORT TO FILTER FACT TABLE THROUGH INNER JOIN
+WITH cohort AS (
+  SELECT tm.*, 
+    ROW_NUMBER() OVER (PARTITION BY tm.social_security_number ORDER BY tm.reporting_month DESC) AS latest_order
+  FROM ds_ar_dhs.tanf_member tm 
+  JOIN ds_ar_dhs.tanf_case tc ON 
+    (tm.case_id = tc.case_id AND tm.reporting_month = tc.reporting_month)
+  WHERE tm.valid_ssn_format = 'Y' AND
+    tc.child_only_case = 'FALSE' AND 
+    tm.work_eligible_individual IN ('1', '2', '3', '4', '5') AND 
+    CAST(work_participation_status AS NUMERIC) BETWEEN 12 AND 98 AND
+    tm.tanf_end_of_spell = 'TRUE' AND
+    tm.reporting_month IN ('201901', '201902', '201903')
+),
+fact_link AS (
+  SELECT fact.person_key, MAX(fact.entry_year_quarter_key) AS entry_year_quarter_key, fact.exit_year_quarter_key
+  FROM tr_e2e.fact_person_program_start_end fact
+  JOIN tr_e2e.dim_person dp ON dp.person_key = fact.person_key
+  --join on exit to limit exit information to 2019Q1
+  JOIN cohort ON dp.person_uid = cohort.social_security_number
+  JOIN tr_e2e.dim_year_quarter dyq ON fact.exit_year_quarter_key = dyq.year_quarter_key
+  JOIN tr_e2e.dim_program dpro oN dpro.program_key = fact.program_key
+  WHERE cohort.latest_order = 1 AND
+    dyq.calendar_year = 2019 and dyq.calendar_quarter = 1 AND
+    dpro.program_name = 'Temporary Assistance for Needy Families (TANF)'
+  GROUP BY fact.person_key, fact.exit_year_quarter_key
+)
+SELECT COUNT(*) AS n_rows, COUNT(DISTINCT(person_key)) AS n_ppl
+FROM fact_link
+```
+
+## `dbplyr` query
+
+```{r}
+tm <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    valid_ssn_format == 'Y',
+    work_eligible_individual %in% c('1', '2', '3', '4', '5'),
+    between(as.numeric(work_participation_status), 12, 98),
+    tanf_end_of_spell == "TRUE",
+    reporting_month %in% c("201901", "201902", "201903")
+  ) %>%
+  group_by(social_security_number) %>%
+  # window_order() assigns ordering within each group using a SQL window function
+  window_order(desc(reporting_month)) %>%
+  # row_number() assigns a sequential integer within each group (social_security_number)
+  mutate(latest_order = row_number()) %>%
+  ungroup() %>%
+  filter(latest_order == 1)
+
+tc <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_case")) %>%
+  filter(child_only_case == "FALSE")
+
+cohort <- tm %>%
+  inner_join(tc, by = c("case_id", "reporting_month")) 
+
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_program_start_end")) 
+
+dyq <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  filter(calendar_year == '2019', calendar_quarter == '1')
+
+dpro <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name == 'Temporary Assistance for Needy Families (TANF)')
+
+con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_person")) %>%
+  inner_join(cohort, by = c("person_uid" = "social_security_number")) %>%
+  inner_join(fact, by = c("person_key" = "person_key")) %>%
+  inner_join(dyq, by = c("exit_year_quarter_key" = "year_quarter_key")) %>%
+  inner_join(dpro, by = "program_key") %>%
+  group_by(person_key, exit_year_quarter_key) %>%
+  summarize(
+    entry_year_quarter_key = max(entry_year_quarter_key)
+  ) %>%
+  ungroup() %>%
+  summarize(
+    n_rows = n(),
+    n_ppl = n_distinct(person_key)
+  )
+```
+:::
+
+Now that we have confirmed accurate translation to the fact table, we can link this information to identify other episodes of service records starting at the same time as the TANF spell for our cohort. We will do so using a left join to a separate version of the `fact_person_program_start_end` table, limiting it to SNAP and Adult Education entries (`program_key = 9 or 12`). At the end, we will read the results of this query into R to further explore our linked data frame.
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+WITH cohort AS (
+  SELECT tm.*, 
+    ROW_NUMBER() OVER (PARTITION BY tm.social_security_number ORDER BY tm.reporting_month DESC) AS latest_order
+  FROM ds_ar_dhs.tanf_member tm 
+  JOIN ds_ar_dhs.tanf_case tc ON 
+    (tm.case_id = tc.case_id AND tm.reporting_month = tc.reporting_month)
+  WHERE tm.valid_ssn_format = 'Y' AND
+    tc.child_only_case = 'FALSE' AND 
+    tm.work_eligible_individual IN ('1', '2', '3', '4', '5') AND 
+    CAST(work_participation_status AS NUMERIC) BETWEEN 12 AND 98 AND
+    tm.tanf_end_of_spell = 'TRUE' AND
+    tm.reporting_month IN ('201901', '201902', '201903')
+),
+fact_link AS (
+  SELECT fact.person_key, MAX(fact.entry_year_quarter_key) AS entry_year_quarter_key, fact.exit_year_quarter_key
+  FROM tr_e2e.fact_person_program_start_end fact
+  JOIN tr_e2e.dim_person dp ON dp.person_key = fact.person_key
+  --join on exit to limit exit information to 2019Q1
+  JOIN cohort ON dp.person_uid = cohort.social_security_number
+  JOIN tr_e2e.dim_year_quarter dyq ON fact.exit_year_quarter_key = dyq.year_quarter_key
+  JOIN tr_e2e.dim_program dpro oN dpro.program_key = fact.program_key
+  WHERE cohort.latest_order = 1 AND
+    dyq.calendar_year = 2019 and dyq.calendar_quarter = 1 AND
+    dpro.program_name = 'Temporary Assistance for Needy Families (TANF)'
+  GROUP BY fact.person_key, fact.exit_year_quarter_key
+)
+SELECT fact_link.*, fact_co.program_key  
+FROM fact_link 
+--LEFT JOIN TO KEEP EVERYONE WHO IS NOT CO-ENROLLED WITH THESE CONSTRAINTS
+--JOIN ON ENTRY, NOT EXIT QUARTER
+--PROGRAM_KEY CONSTRAINT NEEDS TO BE INSIDE THE JOIN CONDITIONS OF LEFT JOIN
+--OTHERWISE WILL BEHAVE LIKE AN INNER JOIN IF USING WHERE
+LEFT JOIN tr_e2e.fact_person_program_start_end fact_co ON
+	(fact_link.person_key = fact_co.person_key AND fact_link.entry_year_quarter_key = fact_co.entry_year_quarter_key AND fact_co.program_key IN (9, 12))
+"
+
+cohort_co_enroll <- dbGetQuery(con, qry)
+
+head(cohort_co_enroll)
+```
+
+## `dbplyr` query
+
+```{r}
+tm <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    valid_ssn_format == 'Y',
+    work_eligible_individual %in% c('1', '2', '3', '4', '5'),
+    between(as.numeric(work_participation_status), 12, 98),
+    tanf_end_of_spell == "TRUE",
+    reporting_month %in% c("201901", "201902", "201903")
+  ) %>%
+  group_by(social_security_number) %>%
+  # window_order() assigns ordering within each group using a SQL window function
+  window_order(desc(reporting_month)) %>%
+  # row_number() assigns a sequential integer within each group (social_security_number)
+  mutate(latest_order = row_number()) %>%
+  ungroup() %>%
+  filter(latest_order == 1)
+
+tc <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_case")) %>%
+  filter(child_only_case == "FALSE")
+
+cohort <- tm %>%
+  inner_join(tc, by = c("case_id", "reporting_month")) 
+
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_program_start_end")) 
+
+dyq <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  filter(calendar_year == '2019', calendar_quarter == '1')
+
+dpro <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name == 'Temporary Assistance for Needy Families (TANF)')
+
+fact_link <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_person")) %>%
+  inner_join(cohort, by = c("person_uid" = "social_security_number")) %>%
+  inner_join(fact, by = c("person_key" = "person_key")) %>%
+  inner_join(dyq, by = c("exit_year_quarter_key" = "year_quarter_key")) %>%
+  inner_join(dpro, by = "program_key") %>%
+  group_by(person_key, exit_year_quarter_key) %>%
+  summarize(
+    entry_year_quarter_key = max(entry_year_quarter_key)
+  ) %>%
+  ungroup()
+
+fact_co <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_program_start_end")) %>%
+  # filter for snap and adult ed
+  filter(program_key %in% c(9, 12)) %>%
+  # keep only relevant columns for join and post join
+  select(person_key, entry_year_quarter_key, program_key)
+
+cohort_co_enroll <- fact_link %>%
+  left_join(fact_co, by = c("person_key", "entry_year_quarter_key")) %>%
+  collect()
+
+head(cohort_co_enroll)
+```
+:::
+
+We can confirm that we have the same number of people as before. We might have more than one row per person if an individual started separate spells in Adult Education and SNAP both in the same quarter they started their TANF episode.
+
+```{r}
+cohort_co_enroll %>%
+  summarize(
+    n_rows = n(),
+    n_ppl = n_distinct(person_key)
+  )
+```
+
+Now that we have the information pulled in, we can take a similar approach in working with our cohort relative to that of our [cross-section](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/03_cross_section.html#concurrent-participation). Here, instead of assigning individuals to different groups of concurrent participation, we will designate their group of initial simultaneous co-enrollment relative to their TANF spell. Since we plan on leveraging this information in the future, we will hold off on aggregating counts until the groups are added to the original data frame by person.
+
+```{r}
+# isolate those that started spells in SNAP and Adult Ed at the same time
+# they will have two rows, one for SNAP and one for Adult Ed
+all_three <- cohort_co_enroll %>%
+  group_by(person_key) %>%
+  summarize(
+    n = n()
+  ) %>%
+  filter(n > 1) %>%
+  ungroup() %>%
+  select(-n) %>%
+  mutate(program_name = "TANF + SNAP + Adult ED Joint")
+
+# identify those not co-enrolled in both programs and assign to appropriate group
+not_three <- cohort_co_enroll %>%
+  # anti_join ignores all observations in all_three
+  anti_join(all_three, by = 'person_key') %>%
+  mutate(
+    program_name = case_when(
+      program_key == 9 ~ "TANF + SNAP",
+      program_key == 12 ~ "TANF + Adult ED Joint",
+      is.na(program_key) ~ "TANF",
+      TRUE ~ "missing"
+    )
+  ) %>%
+  # include only relevant columns
+  select(person_key, program_name)
+
+# combine rows from not_three and all_three since there is no overlap in groups
+# and they contain everyone from our cohort
+co_info <- not_three %>%
+  bind_rows(all_three)
+
+# join back to cohort_co_enroll
+cohort_co_enroll <- cohort_co_enroll %>%
+  inner_join(co_info, by = "person_key") %>%
+  # limit to one row per person now that groups have been identified
+  # because those with more than one row were already accounted for in group assignments
+  distinct(person_key, .keep_all=TRUE) %>%
+  select(-program_key)
+
+head(cohort_co_enroll)
+```
+
+With our assignments added, we can take a look at the breakdown by co-enrollment group:
+
+```{r}
+cohort_co_enroll %>% 
+  group_by(program_name) %>%
+  summarize(
+    n_inds = n_distinct(person_key)
+  )
+```
+
+Since some of the groups are quite small, we can also think of the groups as an indicator tracking the presence of co-enrollment:
+
+```{r}
+cohort_co_enroll %>%
+  mutate(co_enroll_ind = ifelse(str_detect(program_name, "[+]"), "yes", "no")) %>%
+  count(co_enroll_ind)
+```
+
+::: callout-important
+## Checkpoint
+
+Relative to the final treemap output in the [previous notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/03_cross_section.html#concurrent-participation), does this finding surprise you? Remember that we are only looking at a subset of those in the original cross-section, and within that, are further limiting from concurrent participation to simultaneous co-enrollment at the start of the original TANF spell - some of the individuals who do not appear to be co-enrolled may have already been previously enrolled (and are still enrolled) in either SNAP or Adult Education at this time.
+:::
+
+We can take this a step further by linking it back to our `cohort_person` data frame, which contains the rest of the information from the original TANF data. By doing so, we can build on our exploration in an earlier section by adding the co-enrollment presence indicator to our time on TANF distribution:
+
+> Note: We purposely added the `person_key` column into `cohort_person`, even though it was unnecessary at the time, to allow for the linkage between the fact and original tables in R.
+
+```{r}
+# save as new data frame
+cohort_tot <- cohort_person %>%
+  inner_join(cohort_co_enroll, by = "person_key") %>%
+  mutate(
+    co_enroll_ind = ifelse(str_detect(program_name, "[+]"), "yes", "no"),
+    tanf_spell_months = as.numeric(tanf_spell_months)
+  ) 
+
+cohort_tot %>%
+  ggplot(aes(x=tanf_spell_months, color = co_enroll_ind)) + 
+  # using density plot instead of histogram
+  geom_density()
+```
+
+Interesting! We can see a higher concentration of those co-enrolled in SNAP, Adult Education, or both, with shorter TANF spells. There may be more to check out here, and you are certainly encouraged to do so as an optional technical challenge.
+
+::: callout-important
+## Checkpoint
+
+Now that we have demonstrated a use case of the enrollment by spell fact table, think about how your team may use this table in your project. Are there particular programs that you are interested in? How could you modify the code in this notebook to suit the time period, demographic group, and set of participants in which you are interested?
+:::
+
+## Saving our Cohort as a Permanent Table
+
+Since we plan on working with our cohort in future analyses, we will save our final cohort data frame, `cohort_tot`, as a permanent table in the `tr_e2e` schema. The `tr_e2e` schema is available as a read/write schema, meaning that you can create permanent tables in the same schema, as long as you are in this workspace. You can also create permanent tables directly in SQL.
+
+> You are encouraged to save your analytic frame for your team project to the `tr_e2e` schema. **To differentiate between groups, we ask that you add a prefix to the title that includes the class and state team information.** For example, if a team from New York in Class 1 wanted to save a permanent table, they should save it to `tr_e2e.class1_ny_INSERT_TABLE_NAME`, with `INSERT_TABLE_NAME` replaced by a more specific table description.
+
+```{r, eval=FALSE}
+DBI::dbWriteTable(
+  conn = con, 
+  name = 'tr_e2e.nb_cohort',
+  value = cohort_tot,
+)
+
+qry <- "GRANT SELECT ON TABLE tr_e2e.nb_cohort TO group db_t00113_rw"
+```
+
+# Longitudinal Measures
+
+As we have hinted to earlier, an advantage of the cohort perspective is that it allows us to follow our population of interest over time and observe their future behavior. While we will expand on this in the next notebook, we can start to think about appropriate measures by introducing one that is relatively easy to calculate given our current understanding of the data model: TANF reenrollment.
+
+## TANF Reenrollment
+
+A primary goal of TANF is to help individuals move toward self-sufficiency through its financial assistance and employment and training opportunities. In defining success as self-sufficiency, one possible measure could be return to TANF, with those returning seeking further assistance.
+
+We can identify reenrollment in TANF for our population of interest by bringing back the other fact table capturing quarterly enrollment, `tr_e2e.fact_person_quarterly_program_enrollment`. Since our cohort is defined by a specific exit, 2019Q1, any existence of TANF participation (`program_key = 10`) in a future quarter is evidence of reenrollment. For a future inquiry, we will only return the earliest return relative to the end quarter defining our cohort.
+
+> Note: We could also use the `tanf_member` table to identify re-enrollment. The fact table is more flexible though if you wanted to assess reentry, or even entry, into a suite of programs.
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+select fact.person_key, min(fact.enrollment_quarter_key) as earliest_return
+from tr_e2e.nb_cohort nc 
+join tr_e2e.fact_person_quarterly_program_enrollment fact on 
+	(nc.person_key = fact.person_key and fact.enrollment_quarter_key > nc.exit_year_quarter_key)
+where fact.program_key = 10 
+group by fact.person_key
+"
+
+cohort_reentry <- dbGetQuery(con, qry)
+
+head(cohort_reentry)
+```
+
+## `dbplyr` query
+
+```{r}
+nc <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "nb_cohort")) 
+
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_quarterly_program_enrollment")) %>%
+  filter(program_key == 10)
+
+cohort_reentry <- nc %>%
+  inner_join(fact, by = "person_key") %>%
+  filter(enrollment_quarter_key > exit_year_quarter_key) %>%
+  group_by(person_key) %>%
+  summarize(
+    earliest_return = min(enrollment_quarter_key)
+  ) %>% 
+  ungroup() %>%
+  collect()
+
+head(cohort_reentry)
+```
+:::
+
+We can then join (using a left join) this information back to `cohort_tot` and evaluate reentry across the entire cohort.
+
+```{r}
+cohort_tot %>%
+  left_join(cohort_reentry, by = "person_key") %>% 
+  mutate(
+    ever_return = ifelse(is.na(earliest_return), 'no', 'yes')
+  ) %>%
+  group_by(ever_return) %>%
+  summarize(
+    n_ppl = n_distinct(person_key)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    perc = 100*n_ppl/sum(n_ppl)
+  )
+```
+
+We can even assess reenrollment by simultaneous co-enrollment at the start of their TANF spell defining the cohort:
+
+```{r}
+cohort_tot %>%
+  left_join(cohort_reentry, by = "person_key") %>% 
+  mutate(
+    ever_return = ifelse(is.na(earliest_return), 'no', 'yes'),
+    co_enroll_ind = ifelse(str_detect(program_name, "[+]"), "yes", "no")
+  ) %>%
+  group_by(ever_return,co_enroll_ind) %>%
+  summarize(
+    n_ppl = n_distinct(person_key)
+  ) %>%
+  ungroup() %>%
+  group_by(co_enroll_ind) %>%
+  mutate(
+    perc = 100*n_ppl/sum(n_ppl)
+  ) %>%
+  filter(ever_return == 'no')
+```
+
+Fascinating! We see that within our cohort, those simultaneously co-enrolled in TANF and at least one of Adult Education or SNAP seem to return to TANF, at least within the available time period of the data, less often.
+
+If we wanted to dig into the time of earliest re-enrollment, we can do so with the available data:
+
+```{r}
+cohort_tot %>%
+  left_join(cohort_reentry, by = "person_key") %>% 
+  mutate(
+    time_elapsed = case_when(
+      is.na(earliest_return) ~ "Did not return",
+      earliest_return - exit_year_quarter_key <= 4 ~ "Returned Within a Year",
+      earliest_return - exit_year_quarter_key > 4 ~ "Returned After a year",
+      TRUE ~ "missing"
+    )
+  ) %>%
+  group_by(time_elapsed) %>%
+  summarize(
+    n_ppl = n_distinct(person_key)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    perc = 100*n_ppl/sum(n_ppl)
+  ) %>%
+  arrange(desc(perc))
+```
+
+We can see that of those that did return in our cohort, they often returned within a year of their exit. You are welcome to extend this work, perhaps by investigating the distribution between `time_elapsed` and another subgroup available in `cohort_tot`.
+
+## Expanding Outcomes
+
+In future notebooks, we will use this cohort perspective to answer questions around key metrics of employment and wages among program participants. Specifically, in the upcoming measurement notebook, we will examine indicators from the Fiscal Responsibility Act of 2023, including employment and wages 2 and 4 quarters after initial program exit. These three measures are circled in the image below.
+
+![](images/outcomes.png)
+
+# Next Steps: Applying the notebook to your project
+
+This workbook covers the conceptual approach for developing an appropriate cohort aimed at informing a specific research topic. In doing so, it also leveraged a somewhat new part of the data model: the fact table tracking program enrollment by spell. As you work with your group, you should be thinking about the decision rules applied in this notebook and their potential pertinence to your research project. Once you define your cohort, you are encouraged to conduct a basic exploration of key subgroups before progressing with your longitudinal analysis, paying close attention to the subgroup counts. Remember that you are encouraged to repurpose as much code as possible in developing a cohort and subsequent descriptive analysis. As you work through your project, we recommend that you continue to add your thoughts and findings to your team's project template in the ADRF.
+
+# Citations
+
+Wisconsin Applied Data Analytics Training Program - Notebook 2: Cohort Analysis (citation to be updated)

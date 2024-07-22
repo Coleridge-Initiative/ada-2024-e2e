@@ -1,0 +1,1149 @@
+---
+title: "Presentation Preparation"
+author: "Joshua Edelmann and Benjamin Feder"
+subtitle: "Module 2: Notebook 6"
+output:
+  html_document:
+    css: "training.css"
+toc: true
+toc_depth: 3
+toc_float:
+      collapsed: no
+      smooth_scroll: yes
+number-sections: true
+format:
+  html:
+    embed-resources: true
+    df-print: paged
+---
+
+```{css echo=FALSE}
+
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+h2 {margin: 2m 0 !important;} 
+
+details {
+  margin-left: 4em;
+  margin-bottom: .5rem;
+}
+
+summary { 
+  margin-left: -2em;
+}
+```
+
+```{r setup, include=FALSE}
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+
+knitr::opts_chunk$set(include=TRUE, echo=TRUE, eval = FALSE,  warning = FALSE, fig.align = 'center')  #results='hide') # needs to delete results='hide'
+```
+
+```{r, include=FALSE, echo=FALSE}
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+
+## Load libraries
+library(RJDBC)     # For connecting to the database
+# For data manipulation/visualization
+library(tidyverse)
+# For faster date conversions
+library(lubridate)
+library(dbplyr)
+library(odbc)
+library(DBI)
+library(RPostgreSQL)
+library(scales)
+source("P:/pr-ci-training/connection_setup//adrf_redshift.r")
+
+con <- adrf_redshift(usertype = "CI")
+
+```
+
+# Introduction
+
+Welcome to the final notebook for this course, covering **presentation preparation**. Presentation preparation consists of two complementary tasks: (1) developing presentation-ready tables and visuals and (2) providing the necessary information to ensure these files will be approved in the export review process. By building on applied examples from past notebooks, you will be introduced to the necessary procedures for preparing different types of final output for presentation and export review. While it is not required to do so, we highly recommend disclosure proofing your data visualizations along with the underlying tabular data at the same time, as you will see demonstrated in the following sections. You [**may**]{.underline} also export the underlying tabular data from the ADRF and construct visualizations outside the ADRF. This resource is intended to be a reference guide as you start to consider preparing and finalizing your outputs for export from the ADRF.
+
+We will prepare the following tables and visuals in this notebook (click hyperlink to skip to section):
+
+-   [Tabular Output of Race and Ethnicity](#export-1-tabular-output-of-race-and-ethnicity)
+
+-   [Line Graph Depicting Employment Rates](#export-2-line-graph-depicting-employment-rates)
+
+-   [Box Plot Showing Median Earnings After Exit](#export-3-median-earnings-after-exit)
+
+-   [Heat Map of Employment Patterns by Quarter](#export-4-heat-map-showing-employment-patterns-by-quarter)
+
+# Technical setup
+
+As in previous notebooks, we will reintroduce the code required to set up our R environment to connect to the proper database and load certain packages. If you plan on running the SQL code separately, you can copy and paste the code from the SQL cells into your own .sql script in DBeaver. Instructions for creating a new .sql script are available in the `Technical Setup` section of the first Foundations Module [notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Foundations%20Module%20Materials/notebook_1.html#2_Technical_setup).
+
+**If you would like to view the material to establish your own R environment for running the code displayed in this notebook, you can expand the following "R Environment Setup" section by clicking on its heading.**
+
+::: {.callout collapse="true"}
+## R Environment Setup
+
+## Load Libraries {.unnumbered}
+
+We will start by loading necessary packages not readily available in the base R setup.
+
+> As a reminder, every time you create a new R file, you should copy and run the following code snippet.
+
+```{r}
+options(scipen = 999) # avoid scientific notation
+library(RJDBC)
+library(tidyverse) 
+library(lubridate) # working with dates
+library(dbplyr)
+library(scales) # modify percentages (for heatmap)
+```
+
+## Establish Database Connection {.unnumbered}
+
+Now, the following set of commands will set up a connection to the Redshift database:
+
+```{r eval=FALSE}
+dbusr=Sys.getenv("DBUSER")
+dbpswd=Sys.getenv("DBPASSWD")
+
+url <- "jdbc:redshift:iam://adrf-redshift11.cdy8ch2udktk.us-gov-west-1.redshift.amazonaws.com:5439/projects;loginToRp=urn:amazon:webservices:govcloud;ssl=true;AutoCreate=true;idp_host=adfs.adrf.net;idp_port=443;ssl_insecure=true;plugin_name=com.amazon.redshift.plugin.AdfsCredentialsProvider"
+
+driver <- JDBC(
+  "com.amazon.redshift.jdbc42.Driver",
+  classPath = "C:\\drivers\\redshift_withsdk\\redshift-jdbc42-2.1.0.12\\redshift-jdbc42-2.1.0.12.jar",
+  identifier.quote="`"
+)
+
+con <- dbConnect(driver, url, dbusr, dbpswd)
+```
+
+## `.Renviron` File {.unnumbered}
+
+For this code to work, you need to have an `.Renviron` file in your user folder (i.e. `U:\\John.Doe.P00002`) that contains the following:
+
+```         
+DBUSER='adrf\John.Doe.P00002'
+DBPASSWD='xxxxxxxxxxxx'
+```
+
+where `John.Doe.P00002` is replaced with your username and `xxxxxxxxxx` is replaced with your password (both still in quotes!). `DBUSER` should now end with `.T00113`.
+
+A detailed video from the Foundations Module, "Introduction to RStudio," demonstrating how to create an .Renviron file is available on the Resources page on class website in the subsection "Quick Links."
+
+## Saving Export Files {.unnumbered}
+
+We will also create folders for you to save your export files. Organizing files into two separate folders (for export files and supporting documentation) will make the export process easier. First, we are going to pull your `U:/` drive folder name and then create separate folders within for your export files. This code relies on a lot of string manipulation.
+
+> You can skip this code if you already have a preferred file storage method. For whatever reason, if the `user_name` object does not pull your user name, you can overwrite it with `user_name <- "INSERT USER NAME"`.
+
+```{r, include = FALSE, echo = FALSE}
+# NOTE: THIS IS FOR INTERNAL CI USERS BECAUSE THE OTHER CODE DOESN'T WORK FOR US
+# INPUT USER NAME
+user_name <- ''
+
+main_dir <- (sprintf("U:\\%s\\ETA_Class_Exports\\", user_name))
+figures_dir <- (sprintf("U:\\%s\\ETA_Class_Exports\\Output\\", user_name))
+data_dir <- (sprintf("U:\\%s\\ETA_Class_Exports\\Data\\", user_name))
+
+
+dir_list <- c(main_dir, figures_dir, data_dir)
+
+## create directory for outputs if it doesn't already exist (won't overwrite anything)
+for (dir in dir_list) {
+    if (dir.exists(file.path(dir)) == T){
+        print(sprintf("Output Directory %s Already Exists", dir))
+    } else {
+        dir.create(file.path(dir))
+        print(sprintf("Created Output Directory %s", dir))
+    }
+}
+```
+
+```{r, eval=FALSE}
+# pull and check user name 
+user_name <- substring(list.dirs(path = 'U:/', recursive = FALSE), 5)
+
+# run code to create directories
+# sprintf is a string manipulation function that enables us to use symbols as placeholders in R so we can interchange values in an expression
+# rather than rewriting all the queries, we can use sprintf to parameterize the queries, making them much more flexible
+main_dir <- (sprintf("U:\\%s\\ETA_Class_Exports\\", user_name))
+figures_dir <- (sprintf("U:\\%s\\ETA_Class_Exports\\Output\\", user_name))
+data_dir <- (sprintf("U:\\%s\\ETA_Class_Exports\\Data\\", user_name))
+
+
+dir_list <- c(main_dir, figures_dir, data_dir)
+
+## create directory for outputs if it doesn't already exist (won't overwrite anything)
+for (dir in dir_list) {
+    if (dir.exists(file.path(dir)) == T){
+        print(sprintf("Output Directory %s Already Exists", dir))
+    } else {
+        dir.create(file.path(dir))
+        print(sprintf("Created Output Directory %s", dir))
+    }
+}
+
+```
+:::
+
+# Preparing Files for Export
+
+When exporting results, there are 3 items with which to be concerned:
+
+1.  Export file(s): the file(s) you wish to export. They are expected to be disclosure-proofed prior to your team's export submission.
+
+2.  Supporting documentation: these are the supporting files that contain the underlying and non-rounded counts, data, and code used to create the files for export.
+
+3.  Documentation memo: this is generally a .txt or .doc/.docx/.odt file that contains detailed information about each file for export and its corresponding documentation files.
+
+More information on each of these items is available below in the following subsections.
+
+> Note: Your team lead will be submitting the official export request, but you are expected to prepare the files and documentation.
+
+## Export Files
+
+Each team is permitted to export up to 7 files. The guidelines for each file, supplemented with explanations and examples, are listed below. You do not need to memorize this section - it may be in your best interest to refer back to it as you prepare each file for export review.
+
+-   Each team is able to export up to 7 files (figures/tables).
+    -   We limit the number of files to export because reviewing export requests is a highly manual process, thus very time extensive. Along with the traditional ADRF review, it also needs to pass additional review from Arkansas, so each additional file will add more time to the review process. Also, for a 20-minute presentation, 7 files should be more than sufficient.
+-   Every statistic for export must be based on at least 11 individuals.
+    -   Statistics that are based on 0-10 individuals must be suppressed.
+-   Counts must to be rounded.
+    -   Counts below 1000 must be rounded to the nearest ten.
+    -   Counts greater than or equal to 1000 must be rounded to the nearest hundred.
+        -   For example, a count of 868 would be rounded to 870, and a count of 1868 would be rounded to 1900.
+    -   We ask for rounded counts to limit the possibility of complementary disclosure risk.
+-   Reported wages must be rounded to the nearest hundred.
+-   Reported averages must be rounded to the nearest tenth.
+-   Percentages and proportions must be rounded.
+    -   The same rounding rules applied to counts must be applied to both the numerator and denominator before finding the percentage/proportion.
+    -   Percentages must then be rounded to the nearest percent.
+    -   Proportions must be rounded to the nearest hundredth.
+-   Exact percentiles cannot be exported.
+    -   Exact percentiles cannot be exported because they may represent a true data point.
+    -   Instead, for example, you may calculate a "fuzzy median," by averaging the true 45th and 55th percentiles.
+        -   If you are calculating fuzzy wage percentiles, you will need to round to the nearest hundred after calculating the fuzzy percentile.
+        -   If you are calculating fuzzy percentiles for counts of individuals, you will need to round to the nearest 10 if the count is less than 1000 and to the nearest hundred if the count is greater than or equal to 1000.
+-   Exact maxima and minima cannot be exported.
+    -   Maxima and minima cannot be exported because they will correspond to a true data point.
+    -   Suppress maximum and minimum values in general.
+    -   You may replace an exact maximum or minimum with a top-coded value or a fuzzy maximum or minimum value.
+        -   For example: If the maximum value for earnings is 154,325, it could be top-coded as '100,000+'. Another permissible approach using this example would be calculating a fuzzy maximum value, as shown in the box plot [example](#export-3-median-earnings-after-exit).
+-   Complementary suppression
+    -   If your files include totals or your files are dependent on a preceding or subsequent file, you may need to be mindful of complementary disclosure risks - that is assessing if the file totals or the separate files, when read together, might disclose information about less than 11 individuals in the data in a way that a single, simpler file would not.
+    -   Team leads and export reviewers will work with you on implementing any necessary complementary suppression techniques. This is more likely to happen when exporting both totals and subtotals.
+
+## Supporting Documentation
+
+As mentioned above, you will need to provide additional information to accompany each of the files requested for export for them to be approved by the reviewers.
+
+### Underlying counts
+
+You will need to provide a table with underlying counts of individuals for each statistic depicted in the file(s) requested for export. It is often easiest to have a corresponding counts file for each file requested for export - we will adhere to this approach in working through the examples in the notebook.
+
+-   You will need to include both the rounded and the unrounded counts of individuals.
+-   If percentages or proportions are to be exported, you must report both the rounded and the unrounded counts of individuals for the numerator and denominator.
+
+### Code
+
+Please provide the code written to create every file requested for export and the code generating the corresponding underlying counts. It is important for the export reviewers to have the code to better understand what exactly was done and replicate results. Thus, it is important to document every step of the analysis in your code file(s).
+
+## Documentation Memo
+
+The documentation memo is necessary to include in the export request, as it describes each file and potential relationships across files. An example documentation file pertaining to the outputs prepared in this notebook is available in the Notebooks subfolder in the P drive. A quick link is available [here](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/Export_Documentation_Memo.html) as well.
+
+Broadly, the following information should be detailed per file:
+
+-   The source dataset(s) used to generate the output file. If a subset is used, describe the sample restrictions.
+-   Program(s) that produced the file (e.g., R, Stata, Python, etc.)
+-   File name containing underlying research sample counts for this file
+-   File name(s) that contain supporting statistics required with the dataset
+-   File name(s) containing the code used to create this file
+-   Any additional comments to help the reviewers to understand the file or its context.
+
+# Export 1: Tabular Output of Race and Ethnicity {#export-1-tabular-output-of-race-and-ethnicity}
+
+Our first file we will prepare for export is a table containing a detailed breakdown of the race and ethnicity composition of our cohort created in the [Longitudinal Analysis notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/04_longitudinal_analysis.html#raceethnicity). We will first load our cohort into R, and then reuse the code from the initial example to recreate the table:
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "SELECT *
+FROM tr_e2e.nb_cohort
+"
+
+cohort <- dbGetQuery(con, qry)
+head(cohort)
+```
+
+## `dbplyr` query
+
+```{r}
+cohort <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "nb_cohort")) %>%
+  collect()
+
+head(cohort)
+```
+:::
+
+```{r}
+# recreate table
+export_1 <- cohort %>%
+  group_by(eth_recode_person) %>% 
+  summarise(npersons = n_distinct(person_key)) %>% 
+  # ungroup so we can take the percentage with denominator as all in next step
+  ungroup() %>% 
+  mutate(total_persons = sum(npersons),
+         pct = 100 * (npersons/sum(npersons)))
+
+export_1
+```
+
+## Steps for Export
+
+We will adhere to the following steps in preparing this table for export:
+
+1.  Create columns containing the total counts of unique people - this has already been done (`npersons`).
+
+2.  Redact values
+
+    -   Values with individual counts below 11 must be removed.
+
+3.  Round values
+
+    -   Counts below 1000 rounded to the nearest ten
+    -   Counts above or equal to 1000 rounded to the nearest hundred
+    -   Percentages rounded to the nearest percent
+
+## Preparation
+
+We have our data frame containing the information we wish to export. The next couple steps are done concurrently. We'll apply the rounding rules and then the redaction rules. The resulting data frame contains all the information we need for the supporting documentation files.
+
+> Note: We are replacing all values that do not satisfy our disclosure rules with `NA`. The final column, `pct_rounded` is the last column in the data frame.
+
+```{r}
+export_1_data <- export_1 %>% 
+  #applying rounding rules, if counts less than 1000 then round to nearest 10, else round to nearest 100
+  mutate(
+    npersons_rounded = ifelse(npersons < 1000, round(npersons, -1), round(npersons, -2)),
+    #applying redaction rules and then rounding rules for percentages
+    pct_rounded = ifelse(npersons < 11, NA, round(100*npersons_rounded/sum(npersons_rounded),0))
+  )
+
+export_1_data
+```
+
+This data frame now has all of the necessary underlying information for export review. After applying export rules, we recommend comparing the disclosure-proofed output to the original, which may also reveal complementary disclosure issues. Here, since multiple rows of `pct_rounded` were redacted, we do not need to worry about complementary disclosure. Let's save this data frame as a csv in our Data folder in our U: drive.
+
+Although this file will not be exported, it will be used by the export team to make sure the figure satisfies the export requirements.
+
+## Saving Output
+
+For the code in this section to work, you will need a folder called "Data" to save the table using the code below, which was created at the beginning of the notebook.
+
+```{r}
+# saving underlying data for supporting documentation
+write_csv(export_1_data, sprintf('%s/export_1_data.csv', data_dir))
+```
+
+Now that we have saved the underlying counts that we need for the final table, we will now save the final table for export in our Output folder. We do this after removing the non-rounded counts and percentages, as well as any unnecessary columns.
+
+```{r}
+export_1_final <- export_1_data %>%
+  select(eth_recode_person, pct_rounded)
+
+# saving table for export review
+write_csv(export_1_final, sprintf('%s/export_1.csv', figures_dir))
+```
+
+# Export 2: Line Graph depicting Employment Rates {#export-2-line-graph-depicting-employment-rates}
+
+The next file we would like to export is a line plot showing employment rates by quarter relative to exit for our cohort. We initially created part of this table in the [Measurement notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/05_measurement.html#employment-rate---2nd-and-4th-quarter-after-exit), finding employment rates for our cohort in their 2nd and 4th quarters after exit. We will expand upon that example to find all employment rates between five quarters pre- and post-exit, visualizing them in a line plot.
+
+## Steps for Export
+
+We will adhere to the following steps in preparing this table for export:
+
+1.  Create columns containing the total counts of unique people - again, already calculated
+
+2.  Redact values
+
+    -   Values with individual counts below 11 must be removed.
+
+3.  Round values
+
+    -   Counts below 1000 rounded to the nearest ten
+    -   Counts above or equal to 1000 rounded to the nearest hundred
+
+4.  Create visual with disclosure-proofed values
+
+    -   This part is essiential! We need to make sure we are applying the appropriate values to the visual.
+
+## Preparation
+
+We will start by regenerating the underlying data frame, which connects our cohort to employment outcomes:
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+SELECT nc.*, 
+	wage.year_quarter_key as wage_year_quarter_key,
+	wage.ui_quarterly_wages,
+		--CAN CREATE NEW VARIABLE FOR WAGE QUARTER RELATIVE TO TANF EXIT 
+	wage.year_quarter_key - nc.exit_year_quarter_key AS relative_quarter
+FROM tr_e2e.nb_cohort nc 
+LEFT JOIN tr_e2e.fact_person_ui_wage wage ON
+	--include ui_quarterly_wages > 0 in join clause to maintain structure of left join
+	(nc.person_key = wage.person_key AND wage.ui_quarterly_wages > 0 AND
+		--add additional clause to limit wage record focus for within 5 quarters of exit 
+		nc.exit_year_quarter_key <= wage.year_quarter_key + 5 AND nc.exit_year_quarter_key >= wage.year_quarter_key - 5
+	)
+ORDER BY nc.person_key, relative_quarter
+"
+
+cohort_emp <- dbGetQuery(con, qry)
+
+head(cohort_emp)
+
+```
+
+## `dbplyr` query
+
+```{r}
+nc <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "nb_cohort"))
+
+wage <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_ui_wage")) %>%
+  filter(ui_quarterly_wages > 0) %>%
+  select(person_key, year_quarter_key, ui_quarterly_wages) %>%
+  rename(wage_year_quarter_key = year_quarter_key) %>%
+  # cannot join on computer variables, so need to create before join
+  mutate(
+    wage_year_quarter_key_high = wage_year_quarter_key + 5,
+    wage_year_quarter_key_low = wage_year_quarter_key - 5
+  )
+
+cohort_emp <- nc %>%
+  left_join(
+    wage, 
+    # join_by supports inequality conditions (ex. greater than or equal to)
+    join_by(person_key, exit_year_quarter_key <= wage_year_quarter_key_high, exit_year_quarter_key >= wage_year_quarter_key_low)
+  ) %>%
+  mutate(
+    relative_quarter = wage_year_quarter_key - exit_year_quarter_key
+  ) %>%
+  select(-c(wage_year_quarter_key_low, wage_year_quarter_key_high)) %>%
+  arrange(person_key, relative_quarter) %>%
+  collect()
+
+head(cohort_emp)
+```
+:::
+
+Our next step is to take our data frame, `cohort_emp`, and structure it to fit our visual. We need to calculate the employment for all quarters relative to exit. Instead of **filtering** for specific `relative_quarter` values, as we did in the previous notebook, we will comment that code out to find employment rates for all of our quarters of interest.
+
+```{r, max.print=-1}
+# find denominator
+total_cohort <- cohort_emp %>%
+  summarize(
+    n_ppl = n_distinct(person_key)
+  ) %>%
+  pull(n_ppl)
+
+export_2_data <- cohort_emp %>%
+  # filter(relative_quarter %in% c(2, 4)) %>%
+  group_by(relative_quarter) %>%
+  summarize(
+    n_people = n_distinct(person_key)
+  ) %>%
+  ungroup() %>%
+  mutate(total_cohort = total_cohort) %>%
+  # filter(n == 2) %>%
+  mutate(
+    emp_rate = 100*n_people/total_cohort
+  ) 
+
+export_2_data
+```
+
+We will now complete steps 2 and 3 as listed above in tandem.
+
+```{r, max.print=-1}
+export_2_data <- export_2_data %>% 
+  #applying rounding rules, if counts less than 1000 then round to nearest 10, else round to nearest 100
+  mutate(n_people_rounded = ifelse(n_people < 1000, round(n_people, -1), round(n_people, -2)),
+         total_cohort_rounded = round(total_cohort, -1),
+         #applying redaction rules and then rounding rules for percentages
+         emp_rate_rounded = ifelse(n_people < 11, NA, round(100*n_people_rounded/(total_cohort_rounded),0))) %>%
+  # filter out relative_quarter of NA...by-product of join
+  filter(!is.na(relative_quarter))
+
+head(export_2_data)
+```
+
+Since this data frame contains all the underlying information we need for our supporting file, we will hold onto this data frame and eventually save this as a csv to submit with our export request.
+
+Now that we have all necessary information and prepared our underlying file, we can start to build the visual! If you would like a refresher on visualization in R, you can open the drop-down bar, "`ggplot2` refresher," below:
+
+::: {.callout collapse="true"}
+# `ggplot2` refresher
+
+Recall the structure of traditional `ggplot2` syntax:
+
+-   Start with the `ggplot()` statement.
+-   Then, supply a dataset and aesthetic mapping with x pertaining to the variable on the x-axis, and so on, for example: `ggplot(dataset, aes(x = ..., y = ...)`.
+-   From there, provide a geometry type for your plot, represented by `geom_*`, to convey the desired type of visualization. For example, `geom_line()` will plot a line, `geom_point()` will plot points (think scatterplot).
+-   Finally, add additional layers if necessary using `+`, which we will use to add other customization to the plot, including adding labels and titles.
+-   If you like using the other tidyverse packages like `dplyr`, you can connect your data processing and summary workflow directly to `ggplot()` using the pipe operator `%>%` .
+-   Use the `ggsave()` function directly after your `ggplot()` workflow to save the image to your project folder. For example, a complete workflow demonstrated on the publicly available `mtcars` dataset could resemble:
+
+```         
+library(tidyverse)
+mtcars %>%
+  ggplot(aes(x = cyl, y = mpg, color = factor(cyl), group = cyl)) + 
+  geom_point()
+  
+ggsave(filename = "P:/my-project/my-team-folder/myplot.png", dpi = "print")
+```
+:::
+
+We will start with a basic line plot, visualizing `relative_quarter` on the x-axis and `emp_rate_rounded` on the y-axis.
+
+```{r}
+export_2_visual <- export_2_data %>% 
+  ggplot(aes(x = relative_quarter, y = emp_rate_rounded)) +
+  geom_line() 
+
+export_2_visual
+```
+
+We have created our initial line graph, but it can be improved. Specifically, we can adjust the axes, add labels, adjust the line width, and select a different background theme.
+
+```{r}
+export_2_visual <- export_2_visual +
+  # adjust x axis
+  scale_x_continuous(
+    # add axis label
+    name = 'Quarters Relative to Exit',
+    # adjust ticks to include each quarter pre- and post-exit in the data frame
+    breaks=seq(-5, 5, 1)
+  ) + 
+  # adjust y axis range to start at 0
+  ylim(0, 60) +
+  labs(
+      # Add a title that conveys the main takeaway of the graph
+      title = "Employment Rate Declines After the First Quarter Post Exit", 
+      # cite the source of your data
+      caption = 'Source: Arkansas TANF and UI Wage Data',
+      y = 'Rounded Employment Rate'
+    ) +  
+  geom_line(size = 1.1) +
+  theme_classic()
+
+export_2_visual
+```
+
+If we wanted to highlight specific values on the line, we can do so using `geom_text()`. Let's say we wanted to highlight the employment rate at the quarter of TANF exit.
+
+> Note: We could have taken a different approach to this visual, instead treating the y-axis as employment rate by quarter relative to it at exit.
+
+```{r}
+label_q0 <- export_2_data %>%
+  filter(relative_quarter == 0) %>%
+  pull(emp_rate_rounded)
+
+export_2_visual <- export_2_visual +
+  geom_text(
+    x= 0, 
+    # adjust to not overlap with line
+    y = label_q0 + 2,
+    # add context to label
+    label =  paste0('At exit: ', label_q0, '%', sep = ''),
+    check_overlap = TRUE
+  )
+
+export_2_visual
+```
+
+## Saving Output
+
+We can then save this file in our working directory.
+
+```{r}
+# saving visual for export review
+ggsave(export_2_visual,
+       filename = sprintf('%s/export_2_line_plot.png', figures_dir),
+       dpi = "print",
+       width = 7, height = 5)
+
+# saving underlying data for supporting documentation
+write_csv(export_2_data, sprintf('%s/export_2_data.csv', data_dir))
+
+```
+
+# Export 3: Box Plot Showing Median Earnings After Exit {#export-3-median-earnings-after-exit}
+
+Our third example export is a box plot showing median earnings after exit for our cohort, which is inspired by a table initially created in the [Measurement notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/05_measurement.html#median-earnings---2nd-quarter-after-exit).
+
+## Steps for Export
+
+This export file is a bit different than the others. While we still have to show the underlying counts and round certain values, we also have to calculate the fuzzy min, max, and other percentiles in a box plot. As mentioned earlier in this notebook, we cannot export a true percentiles because it could represent a single data point. Instead, we will manually recreate the box plot using fuzzy input values based on the underlying data. In total, we will adhere to the following steps in preparing this table for export:
+
+1.  Create columns containing the total counts of unique people contributing to the distribution
+
+2.  Recalculate our input values for the fuzzy box plot
+
+3.  Redact values
+
+    -   Values with individual counts below 11 must be removed.
+
+4.  Round values
+
+    -   Counts below 1000 rounded to the nearest ten
+    -   Counts above or equal to 1000 rounded to the nearest hundred
+
+5.  Calculate fuzzy input values for the box plot
+
+    -   We can do this by averaging the 45th and 55th percentiles
+
+6.  Create visual with disclosure proofed values
+
+    -   This part is essiential! We need to make sure we are applying the appropriate values to the visual.
+
+We already have read in the base data frame we need to create this visual, `cohort_emp` in the [Export 2 Section](#export-2-line-graph-depicting-employment-rates). This plot will display earnings distributions for our cohort in their second and fourth quarters after exit.
+
+## Preparation
+
+For reference, let's create the initial true box plot:
+
+```{r}
+cohort_emp %>%
+  mutate(
+    ui_quarterly_wages = as.numeric(ui_quarterly_wages),
+    # set quarter to factor so it is not treated as a numeric value
+    relative_quarter = as.factor(relative_quarter)
+  ) %>%
+  filter(relative_quarter %in% c(2,4)) %>%
+  ggplot(aes(x=relative_quarter, y=ui_quarterly_wages)) +
+  geom_boxplot()
+
+```
+
+Now that we have an idea of what we want our visual to look like, we need to start preparing it for export. Keep in mind our final product will not look exactly like this. We will first calculate the fuzzy input values and then apply the rounding and redaction rules. Also, since the outliers, as represented by dots in each plot, reference individual values, we will not be able to include them in the disclosure-proofed version of the file. We define fuzzy percentiles as averages of the true percentiles five points away. For example, a fuzzy median (50th percentile) will be calculated by averaging the true 45th and 55th percentiles. The maximum and minimum values will be "fuzzified" using a similar approach, instead taking the average of the endpoint value and the percentile five points away.
+
+As we create the adjusted input values for the box plot, we will also calculate the number of individuals contributing to each distribution, saving the counts in `n_ppl`.
+
+```{r}
+# steps 1 and 2 for export preparation
+export_3_data <- cohort_emp %>%
+  mutate(
+    ui_quarterly_wages = as.numeric(ui_quarterly_wages), #transform wages to numeric to fit in our plot
+    relative_quarter = as.factor(relative_quarter) #make the quarter a factor so R treats it as a categorical variable
+  ) %>% 
+  # calculate values per quarter, our grouping variable 
+  group_by(relative_quarter) %>%
+  # ignore na wages here so we don't need to add an argument for each calculation below
+  filter(
+    !is.na(ui_quarterly_wages),
+    relative_quarter %in% c(2, 4)
+  ) %>%
+  summarize(
+    n_ppl = n_distinct(social_security_number),
+    fuzzy_25 = (quantile(ui_quarterly_wages, .20) + quantile(ui_quarterly_wages, .30))/2,
+    true_25 = (quantile(ui_quarterly_wages, .25)),
+    fuzzy_50 = (quantile(ui_quarterly_wages, .45) + quantile(ui_quarterly_wages, .55))/2,
+    true_50 = (quantile(ui_quarterly_wages, .50)),
+    fuzzy_75 = (quantile(ui_quarterly_wages, .70) + quantile(ui_quarterly_wages, .80))/2,
+    true_75 = (quantile(ui_quarterly_wages, .75)),
+    fuzzy_min = (quantile(ui_quarterly_wages, 0) + quantile(ui_quarterly_wages, .05))/2,
+    true_min = quantile(ui_quarterly_wages, 0),
+    fuzzy_max = (quantile(ui_quarterly_wages, .95) + quantile(ui_quarterly_wages, 1))/2,
+    true_max = quantile(ui_quarterly_wages, 1)
+  )
+
+export_3_data
+```
+
+Our next step is to round the fuzzy input values and apply redaction rules if necessary. Before doing so, though, we recommend comparing the fuzzy and true values to make sure that the "fuzzied" box plot representation is not distorted too much relative to the true underlying distribution.
+
+```{r}
+export_3_data <- export_3_data %>%
+  mutate(
+    fuzzy_min_rounded = ifelse(n_ppl < 11, NA, round(fuzzy_min, -2)),
+    fuzzy_25_rounded = ifelse(n_ppl < 11, NA, round(fuzzy_25, -2)),
+    fuzzy_50_rounded = ifelse(n_ppl < 11, NA, round(fuzzy_50, -2)),
+    fuzzy_75_rounded = ifelse(n_ppl < 11, NA, round(fuzzy_75, -2)),
+    fuzzy_max_rounded = ifelse(n_ppl < 11, NA, round(fuzzy_max, -2))
+    )
+
+export_3_data
+```
+
+We have everything we need to create our visual and create our supporting documentation file. Our next step is to create the visual using the rounded values. We will also add labels, denote the fuzzy median values (this time using `annotate()` instead of `geom_text()`, and adjust the theme.
+
+```{r}
+# 2nd quarter median
+q2_med <- export_3_data %>% 
+  filter(relative_quarter == 2) %>% 
+  pull(fuzzy_50_rounded)
+
+# 2nd quarter factor
+q2_factor <- export_3_data %>% 
+  filter(relative_quarter == 2) %>% 
+  pull(relative_quarter)
+
+# 4th quarter median
+q4_med <- export_3_data %>% 
+  filter(relative_quarter == 4) %>% 
+  pull(fuzzy_50_rounded)
+
+# 4th quarter factor
+q4_factor <- export_3_data %>% 
+  filter(relative_quarter == 4) %>% 
+  pull(relative_quarter)
+
+export_3_visual <- export_3_data %>%
+  ggplot(aes(x=relative_quarter, ymin=fuzzy_min_rounded, lower = fuzzy_25_rounded, middle = fuzzy_50_rounded, upper = fuzzy_75_rounded, ymax = fuzzy_max_rounded)) +
+  geom_boxplot(stat = 'identity', width = 0.8) + 
+  annotate(
+    "text", 
+     x = q2_factor,
+    # adjust text height
+     y = q2_med + 400,
+     label = q2_med
+  ) +
+  annotate(
+    "text",
+     x = q4_factor,
+    # adjust text height
+     y = q4_med + 400,
+     label = q4_med
+  ) + 
+  labs(
+    title = 'Exiters 4 Quarters after Exit Tend to Have Slightly Higher Wages than at \n2 Quarters After Exit',
+    x='Quarter After TANF Exit',
+    y = 'Earnings',
+    caption = 'Source: Arkansas TANF and UI Wage Data'
+  ) +
+  theme_classic()
+
+export_3_visual
+```
+
+## Saving Output
+
+```{r}
+# save the figure for export review
+ggsave(export_3_visual,
+       filename = sprintf('%s/export_3_box_plot.png', figures_dir),
+       dpi = "print",
+       width = 7, height = 5)
+
+# save the underlying counts for supporting documentation
+write_csv(export_3_data, sprintf('%s/export_3_data.csv', data_dir))
+
+```
+
+# Export 4: Heat Map Showing Employment Patterns by Quarter {#export-4-heat-map-showing-employment-patterns-by-quarter}
+
+Our fourth and final example is of a heat map showing employment patterns by quarter relative to exit for our cohort. This example is inspired by one from the [Measurement notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/05_measurement.html#employment-rate---2nd-quarter-after-exit), and will build on it to evaluate employment patterns, rather than employment at specific points in time, for each individual.
+
+## Steps for Export
+
+We'll follow a similar set of steps as we did in working through the previous examples in this notebook.
+
+1.  Create columns containing the total counts of unique people
+
+2.  Redact values
+
+    -   Values with individual counts below 11 must be removed.
+
+3.  Round values
+
+    -   Counts below 1000 rounded to the nearest ten
+    -   Counts above or equal to 1000 rounded to the nearest hundred
+
+4.  Create visual with disclosure proofed values
+
+    -   This part is essiential! We need to make sure we are applying the appropriate values to the visual.
+
+## Preparation
+
+We already have read in the base data frame we need to create this visual, `cohort_emp`, in the [Export 2 section](#export-2-line-graph-depicting-employment-rates). As a reminder, `cohort_emp` is the linked version of our original cohort to employment outcomes and contains all records from the UI wage records for our cohort within a specific time range, with one record per person/quarter, where that information exists. Like that second export example, this plot will build on the example from the Measurement notebook to include information from five quarters prior to TANF exit all the way to five quarters after exit, instead of just focusing on quarters 2 and 4 after exit.
+
+Let's first confirm the possible values for the `relative_quarter` variable. Any `NA` value means they were not in the wage records at all during this time frame.
+
+```{r}
+cohort_emp %>% 
+  distinct(relative_quarter) %>%
+  arrange(relative_quarter)
+
+```
+
+For these individuals who did not match to our cohort, we will set the `relative_quarter` to 1, so that we will eventually be able to have one observation for each individual/quarter combination. There are other variables in `cohort_emp` we will use to differentiate between employed and not employed records.
+
+```{r}
+cohort_emp <- cohort_emp %>%
+  # set NA relative_quarters to 1
+  mutate(
+    relative_quarter = ifelse(is.na(relative_quarter), 1, relative_quarter)
+  )
+
+# confirm potential values of relative_quarter
+cohort_emp %>% 
+  distinct(relative_quarter) %>%
+  arrange(relative_quarter)
+
+```
+
+Now that we have all individuals, as well as instances of all desired `relative_quarter` values, we can leverage the tidyverse's `complete()` function, which will add additional rows for any person/quarter combinations that do not currently exist. These additional rows will correspond to not employed as per our eventual patterns.
+
+```{r}
+# complete file
+# set ui_quarter_wages to NA to identify employment records
+completed <- cohort_emp %>% 
+  complete(social_security_number, relative_quarter, fill=list(ui_quarterly_wages=NA))
+
+# see that n should be a multiple of n_dist
+completed %>%
+  summarize(
+    n = n(),
+    n_inds = n_distinct(social_security_number),
+    # should have 11 rows per person
+    test = n_inds*11 == n
+  )
+
+```
+
+Now that we have created `completed`, we just need to aggregate and manipulate the data frame so that each column is a quarter and each observation is an individual, with the corresponding columns indicating whether the individual was employed in the given quarter. To start, let's create a variable wage_ind, which will be "yes" if the individual had greater than 0 earnings in the quarter, and "no" otherwise. Additionally, for each column included in the manipulation, we will change the `quarter_number` value from 1, 2, 3, 4 to Q1, Q2, Q3, Q4 and so on and refer to this new variable as `quarter`.
+
+```{r}
+# create wage_ind and quarter variables
+patterns <- completed %>%
+  mutate(
+    wage_ind = ifelse(ui_quarterly_wages <= 0 | is.na(ui_quarterly_wages), "no", "yes"),
+    quarter = paste("Q", relative_quarter, sep="")
+  ) %>%
+  select(social_security_number, relative_quarter, ui_quarterly_wages, wage_ind, quarter)
+
+head(patterns)
+```
+
+Now, we need to pivot the data frame so that each column is a value of quarter, with wage_ind values for the `social_security_number` values. To do so, we will use `pivot_wider()`, which allows us to take a tidy data frame (one observation per row) and "widen" it so that each column becomes values from what was previously a single column (`quarter`) and the rows are occupied by those from a corresponding column (`wage_ind`).
+
+```{r}
+# find most common employment patterns
+patterns_wide <- patterns %>%
+  select(social_security_number, quarter, wage_ind) %>%
+  pivot_wider(names_from = quarter, values_from = wage_ind) %>%
+  # after pivot can summarize by each quarter column to find amount of people per row
+  group_by(`Q-5`, `Q-4`, `Q-3`, `Q-2`, `Q-1`, Q0, Q1, Q2, Q3, Q4, Q5) %>%
+  summarize(
+    ind_cnt = n_distinct(social_security_number)
+  ) %>%
+  arrange(desc(ind_cnt)) %>%
+  ungroup()
+
+head(patterns_wide)
+```
+
+Before we can visualize this information, we need to apply the appropriate rounding and suppression rules.
+
+```{r}
+export_4_data <- patterns_wide %>%
+  mutate(
+    n_ind_cnt_rounded = ifelse(ind_cnt > 999, round(ind_cnt, digits = -2), round(ind_cnt, digits = -1)),
+    n_total = sum(ind_cnt),
+    n_total_rounded = ifelse(n_total > 999, round(n_total, digits = -2), round(n_total, digits = -1)),
+    prop_rounded = ifelse(ind_cnt < 11, NA, round(n_ind_cnt_rounded/n_total_rounded, digits = 2)), 
+    percent_rounded = percent(prop_rounded)
+  ) %>%
+  filter(!is.na(prop_rounded))
+
+export_4_data
+```
+
+We are going to convert the data back into a long format using the `pivot_longer()` before we can use the data as an input to `geom_tile()`, the function for creating heatmaps in ggplot2. Before doing so, let's save a vector of the rounded counts and percentages for each pattern for future reference in the visualization.
+
+```{r}
+counts_percent_rounded <- export_4_data %>%
+  mutate(
+    counts_pcts = paste(export_4_data$n_ind_cnt_rounded, "(", export_4_data$percent_rounded,")")
+  ) %>%
+  pull(counts_pcts)
+
+
+# create data frame so that each row corresponds to a pattern/quarter/employment status observation
+# seq_along() will create a vector to track each pattern
+export_4_data_long <- export_4_data %>%
+  mutate(
+    Pattern = seq_along(1:nrow(export_4_data))
+  ) %>%
+  select(starts_with("Q"), Pattern) %>% 
+  pivot_longer(names_to = 'Quarter', values_to = 'Employed', -Pattern) 
+
+head(export_4_data_long)
+```
+
+Now we are ready to create the visualization using the `geom_tile()` layer, and will add in all updates at once. Since we plan to use different color gradients, we call in `scale_fill_brewer()` to find a colorblind-friendly palette for visualization.
+
+```{r}
+# Full code for the plot
+
+levels = ordered(1:11)  # specify in which order to add the rows from our wide table (called "patterns") 
+                                        
+
+export_4_data_long$Quarter <- factor(export_4_data_long$Quarter, levels=c("Q-5", "Q-4", "Q-3", "Q-2", "Q-1", "Q0", "Q1", "Q2", "Q3", "Q4", "Q5")) # we want to preserve the same ordering of rows as they are sorted in the visual from first to last
+
+export_4_visual <-export_4_data_long %>%
+  # sort y-axis according to levels specified above
+  ggplot(aes(x = Quarter, y = ordered(Pattern, levels=rev(levels)))) +
+  # fill the table with value from Employed column, create black contouring
+  geom_tile(aes(fill = Employed), colour = 'black') +       
+   # specify a colorblind-friendly palette
+  scale_fill_brewer("Employed", palette = "Paired") +     
+  # include x-axis labels on top of the plot
+  scale_x_discrete(position = 'top') +                                                           
+  labs(
+    # Label Y axis
+    y = "Counts (Percentages)",
+    # Label X axis
+    x = "Quarter Relative to TANF Exit" ,
+    # Add a title that reflects the main takeaway of the figure
+    title = "The most common employment pattern of employment around TANF exit is \nnever employed",
+    # Cite the source of your data
+    caption = "Source: Arkansas TANF and UI Wage Records"
+  ) +
+  # rename the y-axis ticks to correspond to the counts from the table
+  scale_y_discrete(labels=rev(counts_percent_rounded)) +
+  # update theme
+  theme_classic()
+
+export_4_visual
+```
+
+This is a great example of the limitations of small n sizes. Because the other patterns had counts less than 11, this visual can only display 2 patterns. When you are developing your visuals, the results you wish to show are limited by the disclosure rules.
+
+## Saving Output
+
+```{r}
+# save the figure for export review
+ggsave(export_4_visual,
+       filename = sprintf('%s/export_4_heat_map.png', figures_dir),
+       dpi = "print",
+       width = 7, height = 5)
+
+# save the underlying counts for supporting documentation
+write_csv(export_4_data, sprintf('%s/export_4_data.csv', data_dir))
+
+```
+
+# Disclosure Rules Compliance Check
+
+Before we submit our files for export, let's verify that the redaction and rounding rules were applied appropriately. This is one last check to make sure we didn't overlook anything. To do this we are going to perform a unit test. A unit test is like a quality check for a small piece of code. Imagine you're baking a cake. Before putting the cake in the oven, you might taste a tiny bit of the batter to make sure it's sweet enough. That tiny taste is like a unit test. It checks if that small part of the cake (or program) is working correctly. Unit testing is primary used in software development but we can apply this logic to our export rules.
+
+The first step is to define a set of functions to check if columns don't contain values less than 11, that our rounding rules were applied correctly and that the redaction rules were applied. We'll also load our unit test library `testthat`. You may need to run `install.packages('testthat')` first.
+
+```{r}
+suppressMessages(library(testthat))
+
+# function for checking column values less than 11
+check_column_values_less_than_11 <- function(column) {
+  all_values_valid <- all(column >= 11)
+  if (all_values_valid) {
+    return(TRUE)
+  } else {
+    invalid_values <- column[column < 11]
+    stop(sprintf("Column contains values less than 11: %s", paste(invalid_values, collapse = ", ")))
+  }
+}
+
+# function for checking rounding of counts
+check_rounding_of_counts <- function(unrounded_values, rounded_values) {
+  calculated_rounded_values <- ifelse(unrounded_values < 1000, round(unrounded_values, -1), round(unrounded_values, -2))
+  return(all(calculated_rounded_values == rounded_values))
+}
+
+# function for checking rounding of percentages
+check_rounding_of_percents <- function(unrounded_num_values, unrounded_den_values, rounded_values, percent = 100, digits = 0) {
+  calculated_rounded_values <- round((unrounded_num_values/unrounded_den_values) * percent, digits)
+  return(all(calculated_rounded_values == rounded_values))
+}
+
+# function for checking that the redaction rules are applied
+check_redaction_rules_applied <- function(counts, expected_stats) {
+  result <- ifelse(counts < 11, NA, expected_stats)
+  return(result)
+}
+
+# function for checking the rounding of wages
+check_rounding_of_wages <- function(column) {
+  all_rounded <- all(floor(column) == column)
+  return(all_rounded)
+}
+
+
+```
+
+We have defined the functions needed to apply the unit tests. Now we'll start testing our export files.
+
+## Unit Testing Export File 1
+
+The first export file contains the tabular output of race and ethnicity for our cohort. We want to make sure that we've applied the redaction rules correctly.
+
+```{r}
+# Define a unit test
+test_that("Replace counts less than 11 with NA", {
+  counts <- export_1_data$npersons
+  # Expected result, we except to see rounded percentages with redaction applied
+  expected_stats <- export_1_final$pct_rounded
+  # Apply the function
+  actual_result <- check_redaction_rules_applied(counts, expected_stats)
+  # Assert that the result matches the expected result
+  expect_equal(actual_result, expected_stats)
+})
+
+
+```
+
+Our first test passed! We confirmed that there aren't any counts below 11 and that the rounding rules were applied. This is the only test we need to perform on this file.
+
+## Unit Testing Export File 2
+
+Our second export file is a line graph depicting employment rates. There are a few things we want to check. First we'll check that the redaction rules were applied. Since we are visualizing the employment rates we'll check that the appropriate redaction rules are applied.
+
+```{r}
+test_that("Replace counts less than 11 with NA", {
+  counts <- export_2_data$n_people
+  # Expected result, we except to see rounded emp rates with redaction applied
+  expected_stats <- export_2_data$n_people
+  # Apply the function
+  actual_result <- check_redaction_rules_applied(export_2_data$n_people, export_2_data$n_people)
+  # Assert that the result matches the expected result
+  expect_equal(actual_result, expected_stats)
+})
+
+```
+
+This test passed so the redaction rules are applied correctly. Remember, unique counts less than 11 have to be redacted! Now we'll test that the rounding rules are applied.
+
+```{r}
+
+#checking that the column n_people is rounded
+test_that("Rounding rules are applied", {
+  expect_true(check_rounding_of_counts(export_2_data$n_people, export_2_data
+                                       $n_people_rounded))
+})
+
+#checking that the column total_cohort is rounded
+test_that("Rounding rules are applied for counts", {
+  expect_true(check_rounding_of_counts(export_2_data$total_cohort, export_2_data
+                                       $total_cohort_rounded))
+})
+
+#checking that the column emp_rate_rounded is rounded
+test_that("Rounding rules are applied for percentages", {
+  expect_true(check_rounding_of_percents(export_2_data$n_people_rounded, export_2_data$total_cohort_rounded, export_2_data$emp_rate_rounded))
+})
+
+
+
+```
+
+All 3 tests passed.
+
+## Unit Testing Export File 3
+
+Our third export file is a box plot showing median earnings after exit. Our first check will be ensuring that the counts are greater than 11. Since we are using multiple columns in our visual we'll check the column `n_ppl` to ensure the counts are 11 or greater. Alternatively we can use the other unit test than checks if the redaction rules are applied. For the expected stats we can choose one of the fuzzy percentile columns. Both options are below.
+
+```{r}
+
+# Define a test case, this test will fail
+test_that("Columns values are not less than 11", {
+  expect_true(check_column_values_less_than_11(export_3_data$n_ppl))
+})
+
+test_that("Replace counts less than 11 with NA", {
+  counts <- export_3_data$n_ppl
+  # Expected result, we except to see rounded emp rates with redaction applied
+  expected_stats <- export_3_data$fuzzy_25_rounded
+  # Apply the function
+  actual_result <- check_redaction_rules_applied(counts, expected_stats)
+  # Assert that the result matches the expected result
+  expect_equal(actual_result, expected_stats)
+})
+
+```
+
+Both of these tests passed!
+
+Now we'll check if the fuzzy percentiles have been rounded. The tests if the values in the `_rounded` columns are rounded to the nearest 100.
+
+```{r}
+test_that("Wages are rounded to the nearest 100", {
+  
+  # Filter columns with "_rounded" in their name
+  rounded_columns <- export_3_data %>%
+    select(contains("_rounded"))
+  
+  # Check rounding to nearest 100 for each rounded column
+  expect_true(all(sapply(rounded_columns, check_rounding_of_wages)))
+})
+
+
+
+```
+
+## Unit Testing Export File 4
+
+Our fourth export file is a heat map showing employment patterns by quarter. As before our first check will be ensuring that the counts are greater than 11. Since we are using multiple columns in our visual we'll check the column `n_ppl` to ensure the counts are 11 or greater.
+
+```{r}
+test_that("Columns values are not less than 11", {
+  expect_true(check_column_values_less_than_11(export_4_data$ind_cnt))
+})
+
+```
+
+This test passed. Now we'll check that the rounding rules are applied.
+
+```{r}
+test_that("Rounding rules are applied", {
+  expect_true(check_rounding_of_counts(export_4_data$ind_cnt, export_4_data
+                                       $n_ind_cnt_rounded))
+})
+
+#checking that the column n_total is rounded
+test_that("Rounding rules are applied for counts", {
+  expect_true(check_rounding_of_counts(export_4_data$n_total, export_4_data
+                                       $n_total_rounded))
+})
+
+#checking that the percent column is rounded
+test_that("Rounding rules are applied for percentages", {
+  expect_true(check_rounding_of_percents(export_4_data$n_ind_cnt_rounded, export_4_data$n_total_rounded, export_4_data$prop_rounded, percent = 1, digits = 2))
+})
+
+```
+
+All of our export files passed the unit test meaning we've applied our redaction and rounding rules correctly. Depending on your output you may need to write a custom function and unit test to check your own export files.
+
+# Next steps: Applying this notebook to your project
+
+This notebook may appear to be overwhelming, but majority of the code has been copied from previous notebooks to recreate the final tables and graphs. Focus your attention on the disclosure rules and procedures applied to each output, as well as the visual enhancements made to the base `ggplot2` visualizations. They provide useful information and code techniques to apply to a variety of outputs. We recommend saving all output early so your team members can provide a fresh set of eyes on all the final files to ensure the all rules have been appropriately applied.
+
+Additionally, we recommend revisiting this notebook as you begin disclosure proofing your final tables and graphs so you can ensure your exports are ready for your final presentation and report.
+
+# References
+
+Edelmann, J., & Feder, B. (2023, December 19). Preparing Research Output generated from Arkansas Registered Apprenticeship Partners Information Management Data System and Unemployment Insurance Wage Records for Disclosure Control. Zenodo. <https://doi.org/10.5281/zenodo.10407980>
+
+AR 2024 Longitudinal Analysis Notebook, Corey Sparks, Benjamin Feder, Joshua Edelmann (Citation to come)
+
+AR 2024 Measuring Workforce Outcomes Notebook, Corey Sparks and Benjamin Feder (Citation to come)

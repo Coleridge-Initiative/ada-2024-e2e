@@ -1,0 +1,936 @@
+---
+title: "Module 2: Notebook 3Cross-Sectional Analysis"
+authors: "Corey Sparks, Joshua Edelmann, Benjamin Feder"
+subtitle: "Module 2: Notebook 3"
+toc: true
+toc_depth: 3
+toc_float:
+      collapsed: no
+      smooth_scroll: yes
+number-sections: true
+format:
+  html:
+    embed-resources: true
+    df-print: paged
+---
+
+```{css echo=FALSE}
+
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+h2 {margin: 2m 0 !important;} 
+
+details {
+  margin-left: 4em;
+  margin-bottom: .5rem;
+}
+
+summary { 
+  margin-left: -2em;
+}
+```
+
+```{r setup, include=FALSE}
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+#theme: lumen
+    #highlight: tango
+
+knitr::opts_chunk$set(include=TRUE, echo=TRUE, eval = FALSE,  warning = FALSE, fig.align = 'center')  #results='hide') # needs to delete results='hide'
+```
+
+```{r, include=FALSE, echo=FALSE}
+#HIDE THIS CHUNK FROM KNITTED OUTPUT
+
+## Load libraries
+library(RJDBC)     # For connecting to the database
+# For data manipulation/visualization
+library(tidyverse)
+# For faster date conversions
+library(lubridate)
+library(dbplyr)
+library(odbc)
+library(DBI)
+library(RPostgreSQL)
+library(zoo)
+```
+
+```{r CI_dbsetup, include=FALSE, echo=FALSE}
+redshift_db <- dbDriver("PostgreSQL")
+con <- dbConnect(redshift_db,
+                 host ='adrf-redshift11.cdy8ch2udktk.us-gov-west-1.redshift.amazonaws.com',
+                 port = '5439',
+                 user = tolower(Sys.getenv("RSTUDIO_USER_IDENTITY")),
+                 password = getPass::getPass(),
+                 dbname = 'projects')
+```
+
+# Introduction
+
+Welcome to the third notebook for Module 2 of this course. This notebook will build on the data coverage and structure discussion in the exploratory data analysis notebook to a method rooted in a specific moment in time, a **cross-section analysis**, while presenting a component of the data model. A cross-section allows us to look at a slice of our data at a specific moment in time so we can evaluate the stock of observations, just at that particular snapshot. **Through the remainder of the class notebooks, we will apply each topic to the same focused research topic, all aimed at identifying promising pathways for a specific set of TANF-enrolled individuals before COVID-imposed restrictions were enforced in the state.**
+
+Composing a cross-section enables for broad understandings of volume and in this context, TANF recipient compositions. In addition, within this point in time, we can evaluate the prevalence of participation in multiple benefit programs and drill down into specific combinations. Especially from a benefit provider standpoint, it can be useful to understand common characteristics and situations of those receiving TANF benefits, regardless of benefit duration, particularly in evaluating scenarios that might lead to employment and self-sufficiency.
+
+# Technical setup
+
+Here, we will reintroduce the code required to set up our R environment to connect to the proper database and load certain packages. If you would rather plan on running the SQL code separately, instructions for creating a `.sql` script and running the code directly in DBeaver are also available allow.
+
+**Code chunks in this notebook will be given in both SQL and R, so follow the setup that applies to your preferred language below.**
+
+::: {.callout collapse="true"}
+## SQL Setup
+
+For working with the database directly using SQL, the easiest way is to still copy the commands from this notebook into a script in DBeaver. As a reminder, the steps to do so are as follows:
+
+To create a new .sql script:
+
+1.  Open DBeaver, located on the ADRF Desktop. The icon looks like this:
+
+    ![](images/dbeaver.png)
+
+2.  Establish your connection to the database by logging in. To do this, double-click `Redshift11_projects` on the left hand side, and it will ask for your username and password. Your username is `adrf\` followed by the name of your U: drive folder - for example, `adrf\John.Doe.T00112`. Your password is the same as the **second** password you used to log in to the ADRF - if you forgot it, you **adjust it in the ADRF management portal!**
+
+    After you successfully establish your connection, you should see a green check next to the database name, like so:
+
+    ![](images/success.png)
+
+3.  In the top menu bar, click **SQL Editor** then **New SQL Script**:
+
+    ![](images/new_script.png)
+
+4.  To test if your connection is working, try pasting the following chunk of code into your script:
+
+    ```{sql,  eval=FALSE}
+    SELECT * 
+    FROM tr_e2e.dim_person
+    LIMIT 5
+    ```
+
+    Then run it by clicking the run button next to the script, or by pressing CTRL + Enter.
+
+5.  You should then be able to see the query output in the box below the code.
+:::
+
+::: {.callout collapse="true"}
+## R Setup
+
+The easiest way to work with the Redshift data from within an R Script is using a combination of a JBDC connection and the `dbplyr` package. The necessary setup for this approach is described below.
+
+#### Load libraries {.unnumbered}
+
+Just like we did in the Foundations Module, in running SQL and R code together through R, we need to load the `RJDBC` package. In addition, we will load the `tidyverse` suite of packages, as they will help us implement some of our fundamental data operations while maintaining a consistent syntax. Lastly, to enable an option discussed in the coming sections, we will load a new package for working with databases in R, `dbplyr`.
+
+> Every time you create a new R file, you should copy and run the following code snippet. You can easily copy the entire snippet by hovering over the cell and clicking the clipboard icon on the top-right edge.
+
+```{r}
+options(scipen = 999) # avoid scientific notation
+library(RJDBC)
+library(tidyverse)
+library(dbplyr)
+library(zoo) # time/date manipulations
+```
+
+::: callout-note
+#### New package `dbplyr`{.unnumbered}
+
+In the examples that follow, we continue using our new package for interacting with databases without writing SQL code is also shown. The `dbplyr` package interfaces with a database using standard `dplyr` and `tidyverse` workflows, and complementary code is shown for all SQL query examples. Just like the SQL code, this should be run and executed from R using the connection we established in the collapsed "Environment Setup" section above.
+:::
+
+::: callout-warning
+If you receive an error message saying `there is no package called ...`, then please first run:
+
+```         
+install.packages("PACKAGENAME")
+```
+
+where you replace `PACKAGENAME` with the name of the package that is missing.
+:::
+
+#### Establish Database Connection {.unnumbered}
+
+To load data from the Redshift server into R, we need to first set up a connection to the database. The following set of commands accomplish this:
+
+```{r eval=FALSE}
+dbusr=Sys.getenv("DBUSER")
+dbpswd=Sys.getenv("DBPASSWD")
+
+url <- "jdbc:redshift:iam://adrf-redshift11.cdy8ch2udktk.us-gov-west-1.redshift.amazonaws.com:5439/projects;loginToRp=urn:amazon:webservices:govcloud;ssl=true;AutoCreate=true;idp_host=adfs.adrf.net;idp_port=443;ssl_insecure=true;plugin_name=com.amazon.redshift.plugin.AdfsCredentialsProvider"
+
+driver <- JDBC(
+  "com.amazon.redshift.jdbc42.Driver",
+  classPath = "C:\\drivers\\redshift_withsdk\\redshift-jdbc42-2.1.0.12\\redshift-jdbc42-2.1.0.12.jar",
+  identifier.quote="`"
+)
+
+con <- dbConnect(driver, url, dbusr, dbpswd)
+```
+
+As a reminder, don't worry too much about the details of this connection - **you can simply copy and paste this code each time you want to connect your R script to the Redshift database**.
+
+#### New `.Renviron` {.unnumbered}
+
+For this code to work, you need to create a new `.Renviron` file in your user folder (i.e. `U:\\John.Doe.P00002`) that contains the following:
+
+```         
+DBUSER='adrf\John.Doe.P00002'
+DBPASSWD='xxxxxxxxxxxx'
+```
+
+where `John.Doe.P00002` is replaced with your username and `xxxxxxxxxx` is replaced with your password (both still in quotes!) The setup of this code is nearly identical to that required in the Foundations Module workspace - however, `DBUSER` should now end with `.T00113` instead of `.T00112`.
+
+A detailed video from the Foundations Module, "Introduction to RStudio," demonstrating how to create an .Renviron file is available on the Resources page on class website in the subsection "Quick Links."
+:::
+
+# Data Model: Quarterly Enrollment
+
+In the previous notebook, we began introducing the data model for the class, briefly motivating the program participation fact tables using WIOA data. A data model allows us to create the "modeled data" we use for our analysis - the set of physical, easy-to-combine tables that adhere to the same rule-based framework, and does so by taking the underlying "raw" data tables and converting them into events and observations so they can be analyzed easier.
+
+Here, we will focus on the quarterly program participation fact table, `fact_person_quarterly_program_enrollment`, located in the `tr_e2e` schema. As indicated by its name, this table tracks participation by quarter across the different WIOA, SNAP, and TANF programs. Since it contains participation information at consistent points in time, the table can facilitate the construction of a **cross-sectional** analytic frame. We will link this fact table, which stores the actual observations (facts) of interest, to three dimension tables:
+
+-   Person dimension, storing information on the unique collection of persons available in the data, merging person-level attributes from a variety of sources, resulting in a "golden record" with a higher completeness than is available in individual sources
+-   Time dimension, storing all possible values for a period of time (day, week, quarter, month, year) across a long period and allows for easy cross-referencing across different periods
+-   Program Dimension, a reference table mapping a numeric surrogate identifier in the fact table to a more descriptive program name
+
+The following diagram (available by selecting the "ER Diagram" after clicking on the specific table in the Database Navigator of DBeaver) visualizes the relationships between this fact table and these three dimension tables in the data model:
+
+![](images/fppp_db.png)
+
+Let's dive a bit deeper into each of these tables first before we proceed with our cross-sectional analysis.
+
+## Person Dimension: DIM Person
+
+The person table, located at `tr_e2e.dim_person`, stores information on the characteristics of people, including date of birth, gender, and race/ethnicity. Although it has two separate individual identifiers, `person_key` and `person_uid`, `person_key` is the only one to exist in other tables in the data model. `person_key` is a simplified version of `person_uid`, which refers to the hashed SSN of the individual and can be used to link to the various raw data tables.
+
+We can take a look at a small subset of the table:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT *
+FROM tr_e2e.dim_person
+ORDER BY person_key
+LIMIT 5
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_person")) %>%
+  arrange(person_key) %>%
+  head(5)
+```
+:::
+
+`NULL` values refer to missing values or information not captured across the various data sources.
+
+## Time Dimension: DIM Year Quarter
+
+The time dimension table is located at `tr_e2e.dim_year_quarter` and stores information about specific time periods. The surrogate key is the `year_quarter_key`, which is a simplified version of a specific year/quarter combination. The following query shows the fields in the table:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT *
+FROM tr_e2e.dim_year_quarter
+ORDER BY year_quarter_key
+LIMIT 5
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  arrange(year_quarter_key) %>%
+  head(5)
+```
+:::
+
+We see here that `year_quarter_key` 0 is associated with a nonsensical date in the year 9999, which suggests this is a missing data code.
+
+## Program Dimension: DIM Program
+
+The program dimension table, `tr_e2e.dim_program`, is a reference table mapping the surrogate identifier in the fact table, `program_key`, to its longer program name. We can see the complete table with the following query:
+
+::: panel-tabset
+## SQL Query
+
+```{sql, max.print=-1}
+SELECT *
+FROM tr_e2e.dim_program
+ORDER BY program_key
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  arrange(program_key)
+```
+:::
+
+## Fact: Quarterly Enrollment by Person and Program
+
+As mentioned above, the quarterly enrollment information by person and program is available in `tr_e2e.fact_person_quarterly_program_enrollment`. Each row is a unique combination of person, program, and enrollment, meaning that not only may a person in a program have potentially multiple rows in the data (one for each quarter they are enrolled), but they may also have multiple rows in a given quarter if they are enrolled in **multiple programs** at the same time. This table actually makes it very easy to examine concurrent participation across programs, as we will demonstrate later in this notebook.
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT *
+FROM tr_e2e.fact_person_quarterly_program_enrollment
+LIMIT 5
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_quarterly_program_enrollment")) %>%
+  head(5)
+```
+:::
+
+Note the presence of the three surrogate columns linking to each of the dimension tables: `person_key`, `program_key`, and `enrollment_quarter_key`. Beyond this information, the table contains indicators denoting the enrollment patterns within the quarter, as most program information is tracked at least at the monthly level.
+
+# Cross-section
+
+Cross-sectional analyses allow us to examine the characteristics of people at a selected point in time, permitting us to observe patterns and differences across subpopulations. In general, though, they are limited in gaining a deep understanding of experiences over time because they consist of observations at certain points in time, rather than observations consistently over a time period.
+
+In the figure below, we illustrate that a cross-section actually captures multiple cohorts of individuals at a single point in time, compared to a longitudinal sample, which would follow a single cohort, or multiple cohorts over time. If we take repeated cross-sections of data, we can compare the composition and characteristics of participants across those points in time. This is like comparing information from two census years. Every vertical colored line in the diagram represents a cross-sectional analysis. By developing our own cross-section, we are going to explore one of those vertical lines.
+
+> A cohort is a defined group based on common time-based characteristics. In the diagram, you can think of each cohort as a separate group of enterers based on the date of their initial benefit reception.
+
+![](images/csection.png)
+
+A different analysis method is more appropriate for a longitudinal study, one that we will introduce in the next notebook. Even though we will eventually build out a longitudinal study for recipients starting to receive TANF benefits before COVID-related restrictions were imposed in the state, starting with a cross-sectional analysis will help us better understand the dynamics of the entire set of individuals receiving TANF benefits at this time. Here, we aim to evaluate this stock of claimants in a variety of ways:
+
+-   Race/Ethnicity
+-   Age
+-   Concurrent participation in other programs at the same time
+
+::: callout-important
+## Checkpoint
+
+Do you think a cross-sectional analysis would be helpful for your group project? Either way, jot down some ideas and provide a supporting argument for doing so (or not) in your team's project template. Identify specific date ranges that may be valuable to consider in developing a cross section if you are arguing in favor of the analysis.
+:::
+
+## Creating a Cross-section
+
+The specific pre-COVID time frame we will focus on in this notebook is the first quarter of 2019. For context, in the EDA [notebook](P:/tr-enrollment-to-employment/ETA%20Class%201/Notebooks/01_EDA.html#additional-data-sources), we graphed the number of observations over time for the person-level file, `ds_ar_dhs.tanf_member`. The blue area in the line plot below highlights the observations that will define our cross-section.
+
+> Note: We are using `tanf_member` instead of `tanf_case` because our population of interest is individuals, not cases.
+
+```{r, echo=FALSE}
+qry <- "
+SELECT reporting_month, COUNT(*) as n
+FROM ds_ar_dhs.tanf_member
+WHERE tanf = 'TRUE'
+GROUP BY reporting_month
+ORDER BY reporting_month"
+
+rows_by_month <- dbGetQuery(con, qry)
+
+regions <- tibble(
+  x1=as.yearmon(as.character('201901'), "%Y%m"), 
+  x2 = as.yearmon(as.character('201903'), "%Y%m"), 
+  y1 = -Inf, 
+  y2 = +Inf
+)
+
+rows_by_month %>%
+  mutate(reformat_date = as.yearmon(as.character(reporting_month), "%Y%m")) %>%
+  ggplot(aes(x = reformat_date, y = as.numeric(n) )) +
+  geom_rect(
+    data = regions,
+    inherit.aes = FALSE,
+    mapping = aes(xmin = x1, xmax = x2, ymin = y1, ymax = y2),
+    color = "transparent",
+    fill = "blue",
+    alpha = .2
+  ) +
+  geom_line()
+```
+
+Our cross-section comes roughly a year and a half after the peak in observations in the person-level TANF file. Looking forward, the number of rows continues to decrease over time, losing roughly half of the total number of observations by the start of the 2022 calendar year.
+
+### Using the original data source
+
+We can define and derive our cross-section solely from the original person-level TANF data source. Before we do so, let's remind ourselves of the basic layout of the file:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT *
+FROM ds_ar_dhs.tanf_member
+LIMIT 5
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  head(5)
+```
+:::
+
+Since the file contains observations at the `social_security_number`/`reporting_month` level, we should have enough information just using this table to define our cross-section by limiting `reporting_month`:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT COUNT(*) as num_rows, COUNT(DISTINCT(social_security_number)) as num_ppl
+FROM ds_ar_dhs.tanf_member
+WHERE reporting_month in ('201901', '201902', '201903')
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(reporting_month %in% c("201901", "201902", "201903")) %>%
+  summarize(
+    num_rows = n(),
+    num_ppl = n_distinct(social_security_number)
+  )
+```
+:::
+
+For consistency with future work, where we will link observations across data sources by their hashed social security numbers, we will only consider observations with a validated hashed social security number as part of the cross-section. You may have noticed the column `valid_ssn_format`. It contains two values, either `Y` or `N`. We can add this condition to our pre-existing query:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT COUNT(*) as num_rows, COUNT(DISTINCT(social_security_number)) as num_ppl
+FROM ds_ar_dhs.tanf_member
+WHERE reporting_month in ('201901', '201902', '201903') AND 
+  valid_ssn_format = 'Y'
+```
+
+## `dbplyr` query
+
+```{r}
+con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    reporting_month %in% c("201901", "201902", "201903"),
+    valid_ssn_format == 'Y'
+  ) %>%
+  summarize(
+    num_rows = n(),
+    num_ppl = n_distinct(social_security_number)
+  )
+```
+:::
+
+Note that even though we have attempted to remove the time dimension by limiting our focus to TANF recipients in 2019Q1, since the TANF data is recorded at the monthly grain, and not quarterly, there may be some individuals appearing in the data during multiple months within the quarter. This is indicated by comparing the difference in the number of rows and unique individuals.
+
+We can then read this into R for further analysis:
+
+> The code in the SQL query can be run in DBeaver by pasting just the code inside the quotations after `qry <-`
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+SELECT *
+FROM ds_ar_dhs.tanf_member
+WHERE reporting_month in ('201901', '201902', '201903') AND
+  valid_ssn_format = 'Y'
+"
+cross_section_ods <- dbGetQuery(con, qry)
+
+head(cross_section_ods)
+```
+
+## `dbplyr` query
+
+```{r}
+cross_section_ods <- con %>% 
+  tbl(in_schema(schema = "ds_ar_dhs",
+                table = "tanf_member")) %>%
+  filter(
+    reporting_month %in% c("201901", "201902", "201903"),
+    valid_ssn_format == 'Y'
+  ) %>% 
+  # bring into R 
+  collect()
+
+head(cross_section_ods)
+```
+:::
+
+### Using the fact table
+
+Since the `fact_person_quarterly_program_enrollment` table already separates out information by person, program, and quarter, our query for identifying TANF recipients in 2019Q1 only requires two inner joins to the `dim_program` and `dim_year_quarter` dimension tables:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT COUNT(*) as num_rows, COUNT(DISTINCT(fact.person_key)) as num_ppl
+FROM tr_e2e.fact_person_quarterly_program_enrollment fact 
+--INNER JOIN WORKS BECAUSE DIM TABLES CONTAIN ALL POSSIBLE VALUES IN FACT
+JOIN tr_e2e.dim_program dp ON (dp.program_key = fact.program_key)
+JOIN tr_e2e.dim_year_quarter dyq ON 
+  (fact.enrollment_quarter_key = dyq.year_quarter_key)
+--WHERE IS OKAY TO USE BECAUSE AN INNER JOIN
+--BE CAREFUL USING 'WHERE' WITH A LEFT OR OUTER JOIN
+WHERE dp.program_name = 'Temporary Assistance for Needy Families (TANF)' AND 
+  dyq.calendar_year = '2019' AND dyq.calendar_quarter = '1'
+```
+
+## `dbplyr` query
+
+```{r}
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_quarterly_program_enrollment"))
+
+dp <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name == "Temporary Assistance for Needy Families (TANF)")
+
+dyq <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  filter(calendar_year == '2019', calendar_quarter == '1')
+
+fact %>%
+  inner_join(dp, by = "program_key") %>%
+  inner_join(dyq, by = c("enrollment_quarter_key" = "year_quarter_key")) %>%
+  summarize(
+    num_rows = n(),
+    num_ppl = n_distinct(person_key)
+  )
+```
+:::
+
+In fact, if you compare the number of unique people retrieved in this query to that using the original data source, you will see we have the same number of people! Additionally, since the fact table stores observations quarterly, and not monthly, we only have one row per person. If you refer to the "Fact Table Explainers" guide available on the Class Resources page of the website, you will see that we adhered to the same rules in working with the `tanf_member` file that were used to populate this fact table. Let's take a look at the resulting structure of the merged table:
+
+::: panel-tabset
+## SQL Query
+
+```{sql}
+SELECT fact.*, dp.program_name, dyq.quarter_start_date, dyq.quarter_end_date
+FROM tr_e2e.fact_person_quarterly_program_enrollment fact 
+JOIN tr_e2e.dim_program dp ON (dp.program_key = fact.program_key)
+JOIN tr_e2e.dim_year_quarter dyq ON 
+  (fact.enrollment_quarter_key = dyq.year_quarter_key)
+WHERE dp.program_name = 'Temporary Assistance for Needy Families (TANF)' AND 
+  dyq.calendar_year = '2019' AND dyq.calendar_quarter = '1'
+LIMIT 5
+```
+
+## `dbplyr` query
+
+```{r}
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_quarterly_program_enrollment"))
+
+dp <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name == "Temporary Assistance for Needy Families (TANF)")
+
+dyq <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  filter(calendar_year == '2019', calendar_quarter == '1') %>%
+  # don't need these variables
+  select(-c(calendar_year, calendar_quarter))
+
+fact %>%
+  inner_join(dp, by = "program_key") %>%
+  inner_join(dyq, by = c("enrollment_quarter_key" = "year_quarter_key")) %>%
+  head(5)
+```
+:::
+
+With a join to the person dimension table, little bit of date manipulation, and logic for aggregating the different race/ethnicity columns into one larger variable, we can pull in a data frame to facilitate our next goal, evaluating the race/ethnicity and age compositions of the cross-section:
+
+> Note: We are calculating `age` relative to the start of the quarter.
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+SELECT fact.*
+, dp.program_name
+, dyq.quarter_start_date
+, dyq.quarter_end_date
+, dper.date_of_birth
+--DATEDIFF FINDS DIFFERENCE BETWEEN TWO DATES, AND REDSHIFT ROUNDS DOWN
+, DATEDIFF(quarter, dper.date_of_birth, dyq.quarter_start_date)/4 as age 
+, CASE
+  	WHEN dper.ethnicity_american_indian_or_alaska_native = 'Yes' THEN 'AIAN' 
+  	WHEN dper.ethnicity_black_or_african_american = 'Yes' THEN 'AfAm'
+  	WHEN dper.ethnicity_hispanic_or_latino= 'Yes' THEN 'Hisp'
+  	WHEN dper.ethnicity_asian = 'Yes' THEN 'Asian'
+  	WHEN dper.ethnicity_white = 'Yes' THEN 'Wht'
+  	WHEN dper.ethnicity_other ='Yes' THEN 'Other' 
+  	ELSE 'Missing' 
+ END AS eth_recode
+FROM tr_e2e.fact_person_quarterly_program_enrollment fact
+JOIN tr_e2e.dim_program dp ON (dp.program_key = fact.program_key)
+JOIN tr_e2e.dim_year_quarter dyq 
+	ON (fact.enrollment_quarter_key = dyq.year_quarter_key)
+JOIN tr_e2e.dim_person dper ON (dper.person_key = fact.person_key)
+WHERE dp.program_name = 'Temporary Assistance for Needy Families (TANF)' AND
+  dyq.calendar_year = '2019' AND dyq.calendar_quarter = '1'
+ORDER BY dper.person_key
+"
+
+cross_section_fact <- dbGetQuery(con, qry) %>%
+# redshift using SQL code converts to character automatically, so need to recast as numeric
+  mutate(
+    age = as.numeric(age)
+  )
+
+head(cross_section_fact)
+```
+
+## `dbplyr` query
+
+```{r}
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_quarterly_program_enrollment"))
+
+dp <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name == "Temporary Assistance for Needy Families (TANF)")
+
+dyq <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  filter(calendar_year == '2019', calendar_quarter == '1') %>%
+  # don't need these variables
+  select(-c(calendar_year, calendar_quarter))
+
+dper <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_person")) %>%
+  mutate(
+    eth_recode = case_when(
+      ethnicity_american_indian_or_alaska_native == 'Yes' ~ 'AIAN',
+      ethnicity_black_or_african_american == 'Yes' ~ 'AfAm',
+    	ethnicity_hispanic_or_latino == 'Yes' ~ 'Hisp',
+    	ethnicity_asian == 'Yes' ~ 'Asian',
+    	ethnicity_white == 'Yes' ~ 'Wht',
+    	ethnicity_other == 'Yes' ~ 'Other', 
+    	TRUE ~ 'Missing'
+    )
+  ) %>%
+  # keep only relevant columns
+  select(person_key, date_of_birth, eth_recode)
+
+cross_section_fact <- fact %>%
+  inner_join(dp, by = "program_key") %>%
+  inner_join(dyq, by = c("enrollment_quarter_key" = "year_quarter_key")) %>%
+  inner_join(dper, by = "person_key") %>%
+  arrange(person_key) %>%
+  # take floor to round down to integer like redshift using SQL code 
+  mutate(age = floor(datediff(sql("QUARTER"), date_of_birth, quarter_start_date)/4)) %>%
+  collect() 
+
+head(cross_section_fact)
+```
+:::
+
+While we could proceed with our `cross_section_ods` file, using the data model allows us to leverage the `dim_person` table containing our golden records of time invariant variables, as opposed to working with the separate TANF microdata, which may contain some discrepancies across months for the same person. We read the results of the resulting query into R since moving forward, the methods we will apply require manipulation and visualization either not easily executable or not accessible in SQL relative to R.
+
+## Analysis
+
+With our cross-section identified, we can proceed with our analysis. Keep in mind that the variables we explore in the following subsections represent only a subset of possible comparison groups.
+
+### Race/Ethnicity
+
+We can start by looking at our combined race/ethnicity variable, `eth_recode`.
+
+> Note: `CASE WHEN` in SQL (`case_when()` in R) will stop evaluating the row after the first `WHEN` clause to return TRUE. In the code, for example, if `ethnicity_asian` and `ethnicity_white` were both `'yes'`, the individual will be assigned an `eth_recode` value of `Asian`.
+
+```{r}
+cross_section_fact %>% 
+  group_by(eth_recode) %>% 
+  summarise(npersons = n_distinct( person_key )) %>% 
+  # ungroup so we can take the percentage with denominator as all in next step
+  ungroup() %>% 
+  mutate(pct = 100 * (npersons / sum( npersons )))
+```
+
+Instead of visualizing this distribution using a common bar plot, we can opt for the more adventurous lollipop plot, which uses the `geom_point` and `geom_segment` geometries.
+
+```{r}
+cross_section_fact %>% 
+  group_by(eth_recode) %>% 
+  summarise(npersons = n_distinct( person_key )) %>% 
+  ungroup() %>% 
+  mutate(pct = 100 * (npersons / sum( npersons ))) %>% 
+  ggplot(aes(y =pct,
+             x=eth_recode))+
+  geom_point() +
+  # line should go from 0 to the percentage for each group
+  geom_segment(aes(y = 0, yend = pct, x = eth_recode, xend = eth_recode)) +
+  # x- and y-axes are flipped
+  coord_flip() +
+  labs(title = "Percentage of TANF Recipients by Race/Ethnicity",
+       subtitle = "Cross-section of participants in Q1 2019")
+```
+
+We can see that the vast majority of TANF recipients in the first quarter of 2019 were categorized as either African American or White.
+
+### Age
+
+We can treat age as a continuous variable, visualizing the distribution using a histogram:
+
+```{r, message=FALSE}
+cross_section_fact %>%
+  ggplot(aes(x=age)) +
+  geom_histogram()
+```
+
+While this distribution plot is somewhat useful, we can get a more exact understanding of the distribution by grouping age into separate 5-year intervals:
+
+```{r}
+cross_section_fact %>% 
+  # chose range greater than overall distribution to ensure all are captured
+  mutate(age_group = cut(age, breaks = seq(0, 110, 5), include.lowest = T)) %>% 
+  group_by(age_group) %>% 
+  summarise(npersons = n_distinct( person_key )) %>% 
+  ungroup() %>% 
+  mutate(pct = 100 * (npersons / sum( npersons ))) 
+```
+
+From this we see the highest percentage of recipients in this quarter is between 25 and 30 years of age. Since we plan on eventually analyzing workforce outcomes, let's get a sense of the youngest and oldest individuals in the cross-section:
+
+```{r}
+cross_section_fact %>%
+  summarize(
+    youngest = min(age),
+    oldest = max(age)
+  )
+```
+
+Just from an age standpoint, the cross-section seems to be satisfactory from a workforce-eligibility standpoint on the lower end. However, moving forward, we might want to add an additional condition to narrow in on only those deemed workforce-eligible.
+
+### Concurrent Participation
+
+Above, we developed a cross-section just focusing on TANF recipients. But what if we are interested in looking at concurrent participation across multiple programs within our cross-section of TANF recipients?
+
+We can do so leveraging the `fact_person_quarterly_program_enrollment` table. In the following query, we restrict all potential observations those in the 2019Q1 TANF cross-section, adding additional information if they were enrolled in SNAP or Adult Education at the same time. We could expand this to include all other programs, but for the ease of interpretation, we will just focus on these programs in this example. This is where we really get to witness the power of the data model. Imagine if we had to do all of this linkage across the original SNAP and PIRL data sources!
+
+> There are two `program_name` values pertaining to Adult Education in the fact table. We will only focus on `program_name = Adult Education (JOINT)` because the Joint PIRL table is more complete than the Adult Education information tracked in the regular PIRL file. The Adult Education information from the PIRL file is accessible in the data model by setting `program_name = Adult Education (WIOA)`.
+
+::: panel-tabset
+## SQL Query
+
+```{r}
+qry <- "
+WITH tanf AS (
+  --CROSS SECTION OF 2019Q1 TANF PARTICIPANTS
+	SELECT dper.person_key
+	FROM tr_e2e.fact_person_quarterly_program_enrollment fact
+  JOIN tr_e2e.dim_program dp ON (dp.program_key = fact.program_key)
+  JOIN tr_e2e.dim_year_quarter dyq 
+  	ON (fact.enrollment_quarter_key = dyq.year_quarter_key)
+  JOIN tr_e2e.dim_person dper ON (dper.person_key = fact.person_key)
+  WHERE dp.program_name = 'Temporary Assistance for Needy Families (TANF)' AND
+    dyq.calendar_year = '2019' AND dyq.calendar_quarter = '1'
+),
+adult_snap AS (
+  --CROSS SECTION OF 2019Q1 SNAP AND ADULT EDUCATION PARTICIPANTS
+	SELECT dper.person_key,
+	fact.program_key 
+	FROM tr_e2e.fact_person_quarterly_program_enrollment fact
+  JOIN tr_e2e.dim_program dp ON (dp.program_key = fact.program_key)
+  JOIN tr_e2e.dim_year_quarter dyq 
+  	ON (fact.enrollment_quarter_key = dyq.year_quarter_key)
+  JOIN tr_e2e.dim_person dper ON (dper.person_key = fact.person_key)
+	WHERE dp.program_name IN ('Supplemental Nutrition Assistance Program (SNAP)', 'Adult Education (JOINT)') AND 
+	dyq.calendar_year = '2019' AND dyq.calendar_quarter = '1'
+)
+SELECT tanf.*, adult_snap.program_key 
+FROM tanf 
+--LEFT JOIN KEEPS EVERYONE FROM TANF. IF THEY DON'T JOIN THEY HAVE NA PROGRAM_KEY
+LEFT JOIN adult_snap 
+  ON (tanf.person_key = adult_snap.person_key)
+ORDER BY tanf.person_key, program_key
+"
+
+co_xsection <- dbGetQuery(con, qry)
+
+head(co_xsection)
+```
+
+## `dbplyr` query
+
+```{r}
+fact <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "fact_person_quarterly_program_enrollment"))
+
+dp <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name == "Temporary Assistance for Needy Families (TANF)")
+
+dyq <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_year_quarter")) %>%
+  filter(calendar_year == '2019', calendar_quarter == '1') %>%
+  # don't need these variables
+  select(-c(calendar_year, calendar_quarter))
+
+dper <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_person"))
+
+# cross-section of 2019Q1 tanf participants
+tanf <- fact %>%
+  inner_join(dp, by = "program_key") %>%
+  inner_join(dyq, by = c("enrollment_quarter_key" = "year_quarter_key")) %>%
+  inner_join(dper, by = "person_key") %>%
+  select(person_key)
+
+dp_as <- con %>% 
+  tbl(in_schema(schema = "tr_e2e",
+                table = "dim_program")) %>%
+  filter(program_name %in% c("Supplemental Nutrition Assistance Program (SNAP)", "Adult Education (JOINT)"))
+
+# cross-section of 2019Q1 snap and adult education participants
+adult_snap <- fact %>%
+  inner_join(dp_as, by = "program_key") %>%
+  inner_join(dyq, by = c("enrollment_quarter_key" = "year_quarter_key")) %>%
+  inner_join(dper, by = "person_key") %>%
+  select(person_key, program_key)
+
+co_xsection <- tanf %>%
+  # left_join keeps everyone from tanf. if they don't join they have NA program_key
+  left_join(adult_snap, by = "person_key") %>%
+  arrange(person_key, program_key) %>%
+  collect()
+
+head(co_xsection)
+```
+:::
+
+We can confirm that our join worked as intended by comparing the number of unique `person_key` values in `co_xsection` to that of `cross_section_fact`.
+
+```{r}
+co_xsection %>%
+  summarize(
+    n_rows = n(), 
+    n_people = n_distinct(person_key)
+  )
+```
+
+We can see that we have the same number of people as before, which aligns with the logic of our left join. Additionally, we see that we do not have exactly one row per person - and that is okay! We may have multiple rows per `person_key` if the individual is concurrently participating in all three programs in 2019Q1. In fact, the structure of `co_xsection` may not be as clear as we would like, but it does adhere to the rules of the joining mechanism. Let's take a look at the possible values of `program_key`:
+
+```{r}
+co_xsection %>%
+  distinct(program_key)
+```
+
+Given that TANF corresponds to `program_key = 10`, it may be surprising to see that there are not any observations with this value. But again, this is due to the nature of the join - every individual in `co_xsection` is enrolled in TANF! This means that if they have a NULL `program_key` value, the individual only received TANF benefits in 2019Q1. Otherwise, if they have a non-null `program_key`, then in addition to receiving TANF benefits, they also participated in a separate benefit program.
+
+With some manipulation, we can aggregate this table to categorize the nature of concurrent participation, or lack thereof:
+
+```{r}
+# identify those in all three programs
+# will have two rows in data frame
+all_three <- co_xsection %>%
+  group_by(person_key) %>%
+  summarize(
+    n = n()
+  ) %>%
+  filter(n > 1) %>%
+  ungroup()
+
+# of all either in just TANF or TANF + either SNAP or Adult Ed
+not_three <- co_xsection %>%
+  # anti_join ignores all observations in all_three
+  anti_join(all_three, by = 'person_key') %>%
+  group_by(program_key) %>%
+  summarize(
+    n = n_distinct(person_key)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    program_name = case_when(
+      program_key == 9 ~ "TANF + SNAP",
+      program_key == 12 ~ "TANF + Adult ED Joint",
+      is.na(program_key) ~ "TANF",
+      TRUE ~ "missing"
+    )
+  ) %>%
+  select(-program_key)
+
+not_three %>%
+  add_row(
+    # each person is a row in all_three
+    n = nrow(all_three), 
+    program_name = "TANF + SNAP + Adult ED Joint"
+  ) %>%
+  mutate(perc = 100*n/sum(n)) %>%
+  arrange(desc(perc)) %>%
+  # rearrange columns to bring program name to front
+  select(program_name, everything())
+```
+
+We can visualize this output using a treemap. Unfortunately, a treemap is not a default geometry available in `ggplot2` (loaded with `library(tidyverse)`), but there are thankfully other libraries available in R to create them. In fact, besides the `treemap` package we will be using below, there is a separate `treemapify` package that integrates with the overall `ggplot2` framework. We will be using `treemap` because the default image is a tad cleaner. That being said, the `treemapify` approach may be a bit more flexible.
+
+```{r}
+#load treemap package
+library(treemap)
+
+# if using treemapify 
+#library(treemapify)
+
+not_three %>%
+  add_row(
+    # each person is a row in all_three
+    n = nrow(all_three), 
+    program_name = "TANF + SNAP + Adult ED Joint"
+  ) %>%
+  treemap(index = "program_name", vSize = "n")
+```
+
+Interesting! Between the output table and treemap, we can see that the majority of individuals receiving TANF benefits in 2019Q1 were also participating in SNAP at the same time as well.
+
+::: callout-important
+## Checkpoint
+
+Now that we have demonstrated a use case of the quarterly program participation fact table, think about how your team may use this table in your project. Are there particular programs that you are interested in? How could you modify the code in this notebook to suit the time period, demographic group, and set of participants in which you are interested?
+:::
+
+# Next Steps: Applying the notebook to your project
+
+This workbook applies the concepts of a cross-sectional analysis to the Arkansas data and covers some of the considerations and potential of such a investigation. Through the motivation of building a cross-sectional analytic frame, we leveraged a relatively new facet of the data model, a fact table covering quarterly program participation. We also showed how you can apply the same decision rules populating the data model to the original data source. Beyond limiting a cross-section to a singular program, we demonstrated the full power of the data model structure in using this fact table to identify concurrent participation in related programs. If you want to apply a different set of decision rules to identify a cross-section that are not consistent with the data model, you can still use the model by limiting observations to just those satisfying your team's constraints.
+
+In upcoming notebooks, we will expand the scope of the information covered and focus on carrying out a longitudinal analysis. Even if your team's ultimate plan expands beyond it, a cross-sectional approach may be useful. If your team deems it appropriate to develop a cross-section or use the quarterly program participation fact table, you are encouraged to repurpose as much code as possible in developing your initial snapshot and subsequent descriptive analysis. As you work through your project, remember to add your thoughts and findings to your team's project template in the ADRF.
+
+# Citations
+
+Arkansas Applied Data Analytics Training Program - Notebook 3A: Cross-Sectional Analysis (citation to be updated)
+
+Wisconsin Applied Data Analytics Training Program - Notebook 1B: Cross-Sectional Analysis (citation to be updated)

@@ -1,0 +1,55 @@
+---
+title: "Installing startup packages"
+author: "Corey Sparks - Coleridge Initiative"
+format: 
+  html:
+    embed-resources: true
+---
+
+## How to install `ColeridgeInitiative` R package
+
+We have written a R package to help users install fundamental packages needed for ADA and short course trainings. The package is called `ColeridgeInitiative` and can be installed from within RStudio.
+
+You only have to install the package once and the functions will be available each time you use RStudio.
+
+To install the package, at the Console in RStudio
+
+![](images/console.png)
+
+Type the following:
+
+`install.packages('P:/tr-foundation-module/packages/ColeridgeInitiative_0.1.0.tar.gz', type = 'source', repos = NULL)`
+
+The package will install and when it is finished , you should see:
+
+![](images/done.png)
+
+To use the package, at the console, or in an R script, type
+
+`library(ColeridgeInitiative)`
+
+### Installing basic packages
+
+To install the basic packages needed for the course, run the following command in the console:
+
+`install_new()`
+
+This will take a minute or so, but when it is done, you should see the prompt returned to you
+
+![](images/installed.png)
+
+Now you can use the packages as you would normally use them. For example. to load the `dplyr` package, simply type (at the console, or in a script)
+
+`library(dplyr)`
+
+And the functions in that package will be available to you.
+
+## NOTE
+
+When the foundations module is complete, you will need to install this package again in the Module 2 workspace. At that time, to install the package, modify the installation command to:
+
+`install.packages('P:/tr-enrollment-to-employment/packages/ColeridgeInitiative_0.1.0.tar.gz', type = 'source', repos = NULL)`
+
+### Getting help
+
+If this does not work for you, I recommend reaching out to your team lead or to the slack channel for your course.
