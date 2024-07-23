@@ -10,14 +10,20 @@ book:
   date-format: "[Last Updated on] DD MMMM, YYYY"
   chapters:
     - index.qmd
-    - 01_EDA.qmd
-    - 02_data_model_motivation.qmd
-    - 03_cross_section.qmd
-    - 04_longitudinal_analysis.qmd
-    - 05_measurement.qmd
-    - 06_Presentation_prep.qmd
-    - dimensional_model_creation_scripts.qmd
-    - installing_packages.qmd
+    - part: "Notebooks"
+      chapters:
+        - 01_EDA.qmd
+        - 02_data_model_motivation.qmd
+        - 03_cross_section.qmd
+        - 04_longitudinal_analysis.qmd
+        - 05_measurement.qmd
+        - 06_Presentation_prep.qmd
+    - part: "Dimensional Model Scripts"
+      chapters:
+        - dimensional_model_creation_scripts.qmd
+    - part: "Supplemental"
+      chapters:
+        - installing_packages.qmd
   
   search:
     location: sidebar
@@ -29,7 +35,7 @@ book:
     style: floating
     tools: 
       - icon: github
-        href: https://coleridge-initiative.github.io/ada-2024-e2e.github.io/
+        href: https://coleridge-initiative.github.io/ada-2024-e2e/
         
 format:
   html:

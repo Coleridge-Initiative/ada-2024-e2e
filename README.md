@@ -1,8 +1,8 @@
 # Arkansas ADA 2024 class
 
-The Coleridge Initiative, sponsored by ETA and in partnership with NASWA and the state of Arkansas, will host a training class focused on WIOA, SNAP, and TANF programs and career pathways. Accepted class participants will learn and apply data analytic approaches to linked state SNAP, TANF, WIOA, and UI wage data to better understand workforce behavior and outcomes.
+The Coleridge Initiative, sponsored by ETA and in partnership with NASWA and the state of Arkansas, hosted a suite of training classes focused on WIOA, SNAP, and TANF programs and career pathways. Accepted class participants learned and applied data analytic approaches to link state SNAP, TANF, WIOA, and UI wage data to better understand workforce behavior and outcomes.
 
-This repository contains the [class materials](https://coleridge-initiative.github.io/ada-2024-e2e.github.io/) for the Wisconsin Applied Data Analytics training program.
+This repository contains the [class materials](https://coleridge-initiative.github.io/ada-2024-e2e.github.io/) for the Arkansas Applied Data Analytics training program.
 
 **Data Sources Used for the Class:**
 
