@@ -8,6 +8,7 @@ book:
   author: "Coleridge Initiative"
   date: last-modified 
   date-format: "[Last Updated on] DD MMMM, YYYY"
+  page-navigation: true
   chapters:
     - index.qmd
     - part: "Notebooks"

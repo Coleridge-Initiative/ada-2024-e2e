@@ -1,5 +1,5 @@
 ---
-title: "Module 2: Notebook 3Cross-Sectional Analysis"
+title: "Cross-Sectional Analysis"
 authors: "Corey Sparks, Joshua Edelmann, Benjamin Feder"
 subtitle: "Module 2: Notebook 3"
 toc: true

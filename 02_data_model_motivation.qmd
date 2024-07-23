@@ -1,5 +1,5 @@
 ---
-title: "Module 2: Notebook 2Data Model Motivation"
+title: "Data Model Motivation"
 authors: "Roy McKenzie, Ben Feder"
 subtitle: "Module 2: Notebook 2"
 toc: true
