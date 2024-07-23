@@ -9,6 +9,7 @@ book:
   date: last-modified 
   date-format: "[Last Updated on] DD MMMM, YYYY"
   page-navigation: true
+  downloads: [pdf, epub]
   chapters:
     - index.qmd
     - part: "Notebooks"
