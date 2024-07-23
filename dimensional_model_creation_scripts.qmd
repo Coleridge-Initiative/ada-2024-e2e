@@ -1,5 +1,5 @@
 ---
-title: "Dimensional Model Scripts"
+title: "DDL and Load Scripts"
 format: html
 editor: visual
 ---
