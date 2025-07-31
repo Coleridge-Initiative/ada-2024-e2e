@@ -2322,4 +2322,4 @@ Beyond `degree_level`, we can also evaluate a student's primary earned degree by
 
 # Citations
 
-Arkansas WDQI ADA Training - EDA Notebook (Official citation to come)
+1. Sparks, C., Edelmann, J., & Feder, B. (2025, July 31). Exploratory Data Analysis and Dataset Introduction of the PROMIS Unemployment Insurance (UI) claims data and the Wisconsin UI wage records. Zenodo.
