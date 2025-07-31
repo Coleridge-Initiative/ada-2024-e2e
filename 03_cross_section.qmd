@@ -932,6 +932,6 @@ In upcoming notebooks, we will expand the scope of the information covered and f
 
 # Citations
 
-Arkansas Applied Data Analytics Training Program - Notebook 3A: Cross-Sectional Analysis (citation to be updated)
+1. McGough, R., Mainali, N., Feder, B., & Edelmann, J. (2023, December 19). Linked Dataset Construction for Longitudinal Analysis of Arkansas RAPIDS and UI Wage Records. Zenodo. https://doi.org/10.5281/zenodo.10407416
 
-Wisconsin Applied Data Analytics Training Program - Notebook 1B: Cross-Sectional Analysis (citation to be updated)
+2. Wisconsin Applied Data Analytics Training Program - Notebook 1B: Cross-Sectional Analysis (no official citation available)
