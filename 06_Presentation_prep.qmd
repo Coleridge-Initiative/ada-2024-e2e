@@ -1143,8 +1143,8 @@ Additionally, we recommend revisiting this notebook as you begin disclosure proo
 
 # References
 
-Edelmann, J., & Feder, B. (2023, December 19). Preparing Research Output generated from Arkansas Registered Apprenticeship Partners Information Management Data System and Unemployment Insurance Wage Records for Disclosure Control. Zenodo. <https://doi.org/10.5281/zenodo.10407980>
+1. Edelmann, J., & Feder, B. (2023, December 19). Preparing Research Output generated from Arkansas Registered Apprenticeship Partners Information Management Data System and Unemployment Insurance Wage Records for Disclosure Control. Zenodo. https://doi.org/10.5281/zenodo.10407980
 
-AR 2024 Longitudinal Analysis Notebook, Corey Sparks, Benjamin Feder, Joshua Edelmann (Citation to come)
+2. Sparks, C., Feder, B., & Edelmann, J. (2025, July 31). Cohort Analysis for TANF Populations: Tracking Program Participation Over Time. Zenodo. https://doi.org/10.5281/zenodo.16648752
 
-AR 2024 Measuring Workforce Outcomes Notebook, Corey Sparks and Benjamin Feder (Citation to come)
+3. Sparks, C., Feder, B., & Edelmann, J. (2025, July 31). Cohort Analysis for TANF Populations: Tracking Program Participation Over Time. Zenodo. https://doi.org/10.5281/zenodo.16648752
