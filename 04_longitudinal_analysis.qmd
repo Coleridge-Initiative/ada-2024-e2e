@@ -1155,4 +1155,4 @@ This workbook covers the conceptual approach for developing an appropriate cohor
 
 # Citations
 
-Wisconsin Applied Data Analytics Training Program - Notebook 2: Cohort Analysis (citation to be updated)
+1. Wisconsin Applied Data Analytics Training Program - Notebook 2: Cohort Analysis (no official citation available)
