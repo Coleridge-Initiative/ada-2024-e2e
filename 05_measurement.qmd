@@ -470,7 +470,7 @@ Hopefully, by this point in the notebook, you have been inspired to apply some o
 
 # Citations
 
-Wisconsin Applied Data Analytics Training Program - Notebook 4: Measurement (citation to be updated)
+1. Wisconsin Applied Data Analytics Training Program - Notebook 4: Measurement (no official citation available)
 
 ```{r, echo=FALSE, results='hide'}
 dbDisconnect(con)
